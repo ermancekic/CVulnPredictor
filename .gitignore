@@ -8,12 +8,16 @@ __pycache__/
 .vscode/
 
 # data and repositories directories
-data/
+data/metrics/
+data/single-metrics/
+data/vulns/
+data/general/
 repositories/
 
 crashminer/
 venv/
 LLVM-20.1.7-Linux-X64/
 LLVM-20.1.8-Linux-X64/
+LLVM-20.1.8-Linux-X64.tar.xz
 llvm-project-llvmorg-20.1.8/
 logs/

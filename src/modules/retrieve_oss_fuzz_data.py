@@ -25,7 +25,7 @@ def get_project_tuples_with_vulns():
         all_project_names = json.load(f)
 
     # Load outdated links mapping
-    with open("data/general/outdated_links.json", "r", encoding="utf-8") as f:
+    with open("data/dependencies/outdated_links.json", "r", encoding="utf-8") as f:
         outdated_links = json.load(f)
     
     # Create a mapping dictionary from obsolete URL to updated URL

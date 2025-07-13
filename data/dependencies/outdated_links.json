@@ -1,0 +1,10 @@
+[
+    [
+        "https://github.com/guidovranken/cryptofuzz",
+        "https://github.com/MozillaSecurity/cryptofuzz"
+    ],
+    [
+        "https://github.com/guidovranken/piex.git",
+        "https://github.com/google/piex"
+    ]
+]

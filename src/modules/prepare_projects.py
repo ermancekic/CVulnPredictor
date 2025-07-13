@@ -25,6 +25,7 @@ def prepare_directories():
     """
     current_dir = os.getcwd()
     directories = [
+        os.path.join(current_dir, "logs"),
         os.path.join(current_dir, "data"),
         os.path.join(current_dir, "data", "general"),
         os.path.join(current_dir, "data", "metrics"),
@@ -70,9 +71,11 @@ def get_oss_repo():
         None
     """
     
+    logging.info("Klonen des OSS-Fuzz Repositories...")
     oss_repo_path = os.path.join(os.getcwd(), "repositories", "OSS-Repo")
     
-    if os.path.exists(oss_repo_path):
+    if len(os.listdir(oss_repo_path)) > 0:
+        logging.info("OSS-Fuzz Repository existiert bereits, überspringe Klonen...")
         return
     
     cmd = ["git", "clone", "https://github.com/google/oss-fuzz", oss_repo_path]
@@ -91,7 +94,7 @@ def get_oss_fuzz_vulns():
     
     oss_vulns_repo_path = os.path.join(os.getcwd(), "repositories", "OSS-Vulns")
     
-    if os.path.exists(oss_vulns_repo_path):
+    if len(os.listdir(oss_vulns_repo_path)) > 0:
         return
     
     cmd = ["git", "clone", "https://github.com/google/oss-fuzz-vulns.git", oss_vulns_repo_path]
@@ -146,11 +149,9 @@ def get_oss_projects(project_tuple):
     
     if not commits:
         project_dir = os.path.join(oss_projects_path, project_name)
-        
         if os.path.exists(project_dir):
             logging.info(f"Projekt {project_name} existiert bereits, überspringe Klonen...")
             return
-        
         logging.info(f"Klone Projekt {project_name}...")
         cmd = ["git", "clone", project_url, project_dir]
         subprocess.run(cmd, check=True)
@@ -158,30 +159,30 @@ def get_oss_projects(project_tuple):
         # Check for each commit if the project already exists
         all_commits_exist = True
         missing_commits = []
-        
         for commit in commits:
             commit_dir = os.path.join(oss_projects_path, f"{project_name}_{commit}")
             if not os.path.exists(commit_dir):
                 all_commits_exist = False
                 missing_commits.append(commit)
-        
         if all_commits_exist:
             logging.info(f"Projekt {project_name} mit allen {len(commits)} Commits existiert bereits, überspringe Klonen...")
             return
-        
         for commit in missing_commits:
             commit_dir = os.path.join(oss_projects_path, f"{project_name}_{commit}")
             logging.info(f"Klone {project_name} für Commit {commit}...")
-            
             cmd = ["git", "clone", project_url, commit_dir]
             subprocess.run(cmd, check=True)
-            
             subprocess.run(["git", "-C", commit_dir, "fetch", "origin", commit], check=True)
             try:
                 subprocess.run(["git", "-C", commit_dir, "checkout", commit], check=True)
             except Exception as e:
                 logging.warning(f"Fehler beim Checkout des Commits {commit} für {project_name}: {e}")
-                shutil.rmtree(commit_dir, ignore_errors=True)
+                # Lösche den Ordner, wenn das Ändern des Commits scheitert
+                try:
+                    shutil.rmtree(commit_dir, ignore_errors=True)
+                    logging.info(f"Ordner {commit_dir} wurde nach fehlgeschlagenem Checkout gelöscht.")
+                except Exception as del_e:
+                    logging.error(f"Fehler beim Löschen des Ordners {commit_dir}: {del_e}")
 
 def get_vulnerable_projects_with_commits(vulnerable_projects):
     """
@@ -195,7 +196,7 @@ def get_vulnerable_projects_with_commits(vulnerable_projects):
     """
     vulnerable_projects_with_commits = []
     vulns_dir = os.path.join(os.getcwd(), "data", "vulns")
-    zero_commits_path = os.path.join(os.getcwd(), "data", "zero_commits.json")
+    zero_commits_path = os.path.join(os.getcwd(), "dependencies", "zero_commits.json")
 
     # 1) Load zero_commits.json and convert to Dict
     zero_mapping = {}

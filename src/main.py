@@ -25,6 +25,10 @@ def setup_logging():
     )
 
 setup_logging()
+import modules.prepare_projects
+modules.prepare_projects.get_clang_dependencies()
+modules.prepare_projects.prepare_directories()
+
 # File-Handler nur für Metrik-Fehler
 metrics_err_handler = logging.FileHandler("logs/metrics_errors.log", encoding="utf-8")
 metrics_err_handler.setLevel(logging.ERROR)
@@ -35,7 +39,6 @@ metrics_err_handler.setFormatter(logging.Formatter(
 logger = logging.getLogger("metrics_error_logger")
 logger.addHandler(metrics_err_handler)
 
-import modules.prepare_projects
 import modules.calculate_metrics
 import modules.retrieve_oss_fuzz_data
 import modules.calculate_results
@@ -145,8 +148,6 @@ def main():
     Returns:
         None
     """
-    modules.prepare_projects.get_clang_dependencies()
-    modules.prepare_projects.prepare_directories()
 
     # Clone OSS-Fuzz repository definitions
     modules.prepare_projects.get_oss_repo()
