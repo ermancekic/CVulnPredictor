@@ -1,0 +1,19 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# VS Code
+.vscode/
+
+# data and repositories directories
+data/
+repositories/
+
+crashminer/
+venv/
+LLVM-20.1.7-Linux-X64/
+LLVM-20.1.8-Linux-X64/
+llvm-project-llvmorg-20.1.8/
+logs/
