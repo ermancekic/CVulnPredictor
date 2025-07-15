@@ -1,0 +1,8 @@
+[
+  {
+    "id": "OSV-2025-178",
+    "oss-id": "399458050",
+    "introduced_commit": "1109b6fd408e1c8b03e6ccfdcbe70c2ad0412c13",
+    "revision_url": "https:\/\/oss-fuzz.com\/revisions?job=libfuzzer_asan_net-snmp&range=202502100636:202502120645"
+  }
+]

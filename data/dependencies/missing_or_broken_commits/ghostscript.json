@@ -1,0 +1,20 @@
+[
+  {
+    "id": "OSV-2021-1726",
+    "oss-id": "42616",
+    "introduced_commit": "85125f2d3810cebc850eee00951322403702f103",
+    "revision_url": "https:\/\/oss-fuzz.com\/revisions?job=libfuzzer_asan_ghostscript&range=202112010601:202112120609"
+  },
+  {
+    "id": "OSV-2021-1728",
+    "oss-id": "42687",
+    "introduced_commit": "85125f2d3810cebc850eee00951322403702f103",
+    "revision_url": "https:\/\/oss-fuzz.com\/revisions?job=libfuzzer_asan_ghostscript&range=202112010601:202112120609"
+  },
+  {
+    "id": "OSV-2022-80",
+    "oss-id": "43989",
+    "introduced_commit": "47b3cf18f08c7d6258b773572723b80c6405ffae",
+    "revision_url": "https:\/\/oss-fuzz.com\/revisions?job=libfuzzer_asan_ghostscript&range=202201200601:202201210610"
+  }
+]

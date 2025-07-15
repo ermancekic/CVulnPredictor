@@ -6,5 +6,10 @@
     [
         "https://github.com/guidovranken/piex.git",
         "https://github.com/google/piex"
+    ],
+    [
+        "git:\/\/git.code.sf.net\/p\/net-snmp\/code",
+        "https://github.com/net-snmp/net-snmp.git"
+
     ]
 ]

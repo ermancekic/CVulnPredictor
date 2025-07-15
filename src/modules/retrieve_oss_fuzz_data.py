@@ -10,6 +10,7 @@ import os
 import ujson as json
 import re
 import yaml
+import requests
 
 def get_project_tuples_with_vulns():
     """
@@ -116,8 +117,19 @@ def get_oss_vulns_data_as_json(tuples_with_vulns):
                 else:
                     class_name = method_name = None
 
+                # Extract OSS-Fuzz report ID from references
+                oss_id = None
+                for ref in data.get("references", []):
+                    if ref.get("type") == "REPORT":
+                        url_ref = ref.get("url", "")
+                        m2 = re.search(r'id=(\d+)', url_ref)
+                        if m2:
+                            oss_id = m2.group(1)
+                            break
+
                 reports_for_project.append({
                     "id": data.get("id"),
+                    "oss-id": oss_id,
                     "class": class_name,
                     "method": method_name,
                     "summary": summary,
@@ -127,3 +139,37 @@ def get_oss_vulns_data_as_json(tuples_with_vulns):
         destination_path = os.path.join(destination_dir, f"{project}.json")
         with open(destination_path, "w", encoding="utf-8") as out:
             json.dump(reports_for_project, out, indent=2, ensure_ascii=False)
+            
+def update_missing_commits_in_vulns():
+    """
+    Identify vulnerabilities without introduced commits,
+    retrieve them, and update the data/vulns JSON files.
+    """
+    cwd = os.getcwd()
+    vulns_dir = os.path.join(cwd, "data", "vulns")
+    missing_dir = os.path.join(cwd, "data", "dependencies", "missing_or_broken_commits")
+
+    for fname in os.listdir(missing_dir):
+        if not fname.endswith(".json"):
+            continue
+        project = fname[:-5]
+        missing_file = os.path.join(missing_dir, fname)
+        with open(missing_file, "r", encoding="utf-8") as f:
+            missing_entries = json.load(f)
+        if not missing_entries:
+            continue
+        vuln_file = os.path.join(vulns_dir, f"{project}.json")
+        if not os.path.exists(vuln_file):
+            continue
+        with open(vuln_file, "r", encoding="utf-8") as f:
+            reports = json.load(f)
+        # Map report IDs to their found commit
+        commit_map = {e.get("id"): e.get("introduced_commit") for e in missing_entries if e.get("introduced_commit")}
+        # Update original reports with the retrieved commits
+        for rep in reports:
+            rid = rep.get("id")
+            if rid in commit_map:
+                rep["introduced_commit"] = commit_map[rid]
+        # Write updated reports back to data/vulns
+        with open(vuln_file, "w", encoding="utf-8") as f:
+            json.dump(reports, f, indent=2, ensure_ascii=False)

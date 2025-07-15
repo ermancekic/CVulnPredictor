@@ -987,48 +987,48 @@ def run(source_path, skip_existing=False):
             if is_function_like(c):
                 try:
                     method_name = get_method_name(c)
-                    # loc = calculate_loc(c)
+                    loc = calculate_loc(c)
                 
                     # # Leopard C
-                    # cyclomatic_complexity  = calculate_cyclomatic_complexity(c)
-                    # number_of_loops = calculate_number_of_loops(c)
-                    # number_of_nested_loops = calculate_number_of_nested_loops(c)
-                    # max_nesting_loop_depth = calculate_max_nesting_loop_depth(c)
+                    cyclomatic_complexity  = calculate_cyclomatic_complexity(c)
+                    number_of_loops = calculate_number_of_loops(c)
+                    number_of_nested_loops = calculate_number_of_nested_loops(c)
+                    max_nesting_loop_depth = calculate_max_nesting_loop_depth(c)
                     
                     # Leopard V
                     number_of_parameter_variables = calculate_number_of_parameter_variables(c)
-                    # number_of_callee_parameter_variables = calculate_number_of_callee_parameter_variables(c)
-                    # number_of_pointer_arithmetic = calculate_number_of_pointer_arithmetic(c)
-                    # number_of_variables_involved_in_pointer_arithmetic = calculate_number_of_variables_involved_in_pointer_arithmetic(c)
-                    # max_pointer_arithmetic_variable_is_involved_in = calculate_max_pointer_arithmetic_variable_is_involved_in(c)
-                    # number_of_nested_control_structures = calculate_number_of_nested_control_structures(c)
-                    # maximum_nesting_level_of_control_structures = calculate_maximum_nesting_level_of_control_structures(c)
-                    # maximum_of_control_dependent_control_structures = calculate_maximum_of_control_dependent_control_structures(c)
-                    # maximum_of_data_dependent_control_structures = calculate_maximum_of_data_dependent_control_structures(c)
-                    # number_of_if_structures_without_else = calculate_number_of_if_structures_without_else(c)
-                    # number_of_variables_involved_in_control_predicates = calculate_number_of_variables_involved_in_control_predicates(c)
+                    number_of_callee_parameter_variables = calculate_number_of_callee_parameter_variables(c)
+                    number_of_pointer_arithmetic = calculate_number_of_pointer_arithmetic(c)
+                    number_of_variables_involved_in_pointer_arithmetic = calculate_number_of_variables_involved_in_pointer_arithmetic(c)
+                    max_pointer_arithmetic_variable_is_involved_in = calculate_max_pointer_arithmetic_variable_is_involved_in(c)
+                    number_of_nested_control_structures = calculate_number_of_nested_control_structures(c)
+                    maximum_nesting_level_of_control_structures = calculate_maximum_nesting_level_of_control_structures(c)
+                    maximum_of_control_dependent_control_structures = calculate_maximum_of_control_dependent_control_structures(c)
+                    maximum_of_data_dependent_control_structures = calculate_maximum_of_data_dependent_control_structures(c)
+                    number_of_if_structures_without_else = calculate_number_of_if_structures_without_else(c)
+                    number_of_variables_involved_in_control_predicates = calculate_number_of_variables_involved_in_control_predicates(c)
                 except Exception as e:
-                    logging.error(f"Error for {c.displayname} in {source_file}: {e}")
-                    logging.error(f"Stack trace: {traceback.format_exc()}")
+                    logging.info(f"Error for {c.displayname} in {source_file}: {e}")
+                    logging.info(f"Stack trace: {traceback.format_exc()}")
                     continue
 
                 solution[source_file][method_name] = {
-                    # 'lines of code': loc,
-                    # 'cyclomatic complexity': cyclomatic_complexity,
-                    # 'number of loops': number_of_loops,
-                    # 'number of nested loops': number_of_nested_loops,
-                    # 'max nesting loop depth': max_nesting_loop_depth,
+                    'lines of code': loc,
+                    'cyclomatic complexity': cyclomatic_complexity,
+                    'number of loops': number_of_loops,
+                    'number of nested loops': number_of_nested_loops,
+                    'max nesting loop depth': max_nesting_loop_depth,
                     'number of parameter variables': number_of_parameter_variables,
-                    # 'number of callee parameter variables': number_of_callee_parameter_variables,
-                    # 'number of pointer arithmetic' : number_of_pointer_arithmetic,
-                    # 'number of variables involved in pointer arithmetic': number_of_variables_involved_in_pointer_arithmetic,
-                    # 'max pointer arithmetic variable is involved in': max_pointer_arithmetic_variable_is_involved_in,
-                    # 'number of nested control structures': number_of_nested_control_structures,
-                    # 'maximum nesting level of control structures': maximum_nesting_level_of_control_structures,
-                    # 'maximum of control dependent control structures': maximum_of_control_dependent_control_structures,
-                    # 'maximum of data dependent control structures': maximum_of_data_dependent_control_structures,
-                    # 'number of if structures without else': number_of_if_structures_without_else,
-                    # 'number of variables involved in control predicates': number_of_variables_involved_in_control_predicates
+                    'number of callee parameter variables': number_of_callee_parameter_variables,
+                    'number of pointer arithmetic' : number_of_pointer_arithmetic,
+                    'number of variables involved in pointer arithmetic': number_of_variables_involved_in_pointer_arithmetic,
+                    'max pointer arithmetic variable is involved in': max_pointer_arithmetic_variable_is_involved_in,
+                    'number of nested control structures': number_of_nested_control_structures,
+                    'maximum nesting level of control structures': maximum_nesting_level_of_control_structures,
+                    'maximum of control dependent control structures': maximum_of_control_dependent_control_structures,
+                    'maximum of data dependent control structures': maximum_of_data_dependent_control_structures,
+                    'number of if structures without else': number_of_if_structures_without_else,
+                    'number of variables involved in control predicates': number_of_variables_involved_in_control_predicates
                 }
                 
     print_json(solution, source_path)

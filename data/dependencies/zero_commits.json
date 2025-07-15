@@ -2,5 +2,17 @@
     [
         "https://github.com/envoyproxy/envoy",
         "ef54a03858d0be3e7768d37b5a8c0b136b664e21"
+    ],
+    [
+        "git:\/\/code.qt.io\/qt\/qt5.git",
+        "92351a70e0b9193a1def156a470d9156beb8528b"
+    ],
+    [
+        "https:\/\/github.com\/envoyproxy\/envoy.git",
+        "ef54a03858d0be3e7768d37b5a8c0b136b664e21"
+    ],
+    [
+        "https:\/\/github.com\/freetype\/freetype2-testing.git",
+        "f02e16dffa648fd44a8541b8e89d411d0fa89a4c"
     ]
 ]

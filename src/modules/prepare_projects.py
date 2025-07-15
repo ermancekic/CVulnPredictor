@@ -147,6 +147,11 @@ def get_oss_projects(project_tuple):
     project_url = project_tuple[1]
     commits = list(project_tuple[2:]) if len(project_tuple) > 2 else []
     
+    # Ensure logs directory exists for error logs
+    logs_dir = os.path.join(os.getcwd(), "logs")
+    if not os.path.exists(logs_dir):
+        os.makedirs(logs_dir)
+    
     if not commits:
         project_dir = os.path.join(oss_projects_path, project_name)
         if os.path.exists(project_dir):
@@ -154,7 +159,33 @@ def get_oss_projects(project_tuple):
             return
         logging.info(f"Klone Projekt {project_name}...")
         cmd = ["git", "clone", project_url, project_dir]
-        subprocess.run(cmd, check=True)
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as e:
+            logging.info(f"Fehler beim Klonen von {project_name}: {e}")
+            # Write detailed error into log file
+            error_log = os.path.join(logs_dir, f"{project_name}.log")
+            with open(error_log, 'a', encoding='utf-8') as lf:
+                lf.write(f"[CLONE ERROR] {project_name}: returncode={e.returncode}\nSTDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}\n")
+            # Entferne unvollständiges Verzeichnis
+            try:
+                shutil.rmtree(project_dir, ignore_errors=True)
+                logging.info(f"Unvollständiger Ordner {project_dir} wurde gelöscht.")
+            except Exception as rm_e:
+                logging.info(f"Fehler beim Löschen von {project_dir}: {rm_e}")
+            return
+        except Exception as e:
+            logging.info(f"Fehler beim Klonen von {project_name}: {e}")
+            # Write generic error
+            error_log = os.path.join(logs_dir, f"{project_name}.log")
+            with open(error_log, 'a', encoding='utf-8') as lf:
+                lf.write(f"[CLONE EXCEPTION] {project_name}: {e}\n")
+            try:
+                shutil.rmtree(project_dir, ignore_errors=True)
+                logging.info(f"Unvollständiger Ordner {project_dir} wurde gelöscht.")
+            except Exception as rm_e:
+                logging.info(f"Fehler beim Löschen von {project_dir}: {rm_e}")
+            return
     else:
         # Check for each commit if the project already exists
         all_commits_exist = True
@@ -170,20 +201,34 @@ def get_oss_projects(project_tuple):
         for commit in missing_commits:
             commit_dir = os.path.join(oss_projects_path, f"{project_name}_{commit}")
             logging.info(f"Klone {project_name} für Commit {commit}...")
-            cmd = ["git", "clone", project_url, commit_dir]
-            subprocess.run(cmd, check=True)
-            subprocess.run(["git", "-C", commit_dir, "fetch", "origin", commit], check=True)
             try:
-                subprocess.run(["git", "-C", commit_dir, "checkout", commit], check=True)
-            except Exception as e:
-                logging.warning(f"Fehler beim Checkout des Commits {commit} für {project_name}: {e}")
-                # Lösche den Ordner, wenn das Ändern des Commits scheitert
+                # clone and checkout specific commit, capture output
+                subprocess.run(["git", "clone", project_url, commit_dir], check=True, capture_output=True, text=True)
+                subprocess.run(["git", "-C", commit_dir, "fetch", "origin", commit], check=True, capture_output=True, text=True)
+                subprocess.run(["git", "-C", commit_dir, "checkout", commit], check=True, capture_output=True, text=True)
+            except subprocess.CalledProcessError as e:
+                logging.info(f"Fehler beim Klonen/Fetch/Checkout für {project_name}:{commit}: {e}")
+                # Write detailed error into log
+                error_log = os.path.join(logs_dir, f"{project_name}_{commit}.log")
+                with open(error_log, 'a', encoding='utf-8') as lf:
+                    lf.write(f"[COMMIT ERROR] {project_name}:{commit} returncode={e.returncode}\nSTDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}\n")
+                # Lösche unvollständiges Commit-Verzeichnis
                 try:
                     shutil.rmtree(commit_dir, ignore_errors=True)
-                    logging.info(f"Ordner {commit_dir} wurde nach fehlgeschlagenem Checkout gelöscht.")
-                except Exception as del_e:
-                    logging.error(f"Fehler beim Löschen des Ordners {commit_dir}: {del_e}")
-
+                    logging.info(f"Unvollständiger Ordner {commit_dir} wurde gelöscht.")
+                except Exception as rm_e:
+                    logging.info(f"Fehler beim Löschen von {commit_dir}: {rm_e}")
+            except Exception as e:
+                logging.info(f"Fehler beim Klonen/Fetch/Checkout für {project_name}:{commit}: {e}")
+                error_log = os.path.join(logs_dir, f"{project_name}_{commit}.log")
+                with open(error_log, 'a', encoding='utf-8') as lf:
+                    lf.write(f"[COMMIT EXCEPTION] {project_name}:{commit}: {e}\n")
+                try:
+                    shutil.rmtree(commit_dir, ignore_errors=True)
+                    logging.info(f"Unvollständiger Ordner {commit_dir} wurde gelöscht.")
+                except Exception as rm_e:
+                    logging.info(f"Fehler beim Löschen von {commit_dir}: {rm_e}")
+         
 def get_vulnerable_projects_with_commits(vulnerable_projects):
     """
     Extract vulnerability commits for each project and extend project tuples.
@@ -196,7 +241,7 @@ def get_vulnerable_projects_with_commits(vulnerable_projects):
     """
     vulnerable_projects_with_commits = []
     vulns_dir = os.path.join(os.getcwd(), "data", "vulns")
-    zero_commits_path = os.path.join(os.getcwd(), "dependencies", "zero_commits.json")
+    zero_commits_path = os.path.join(os.getcwd(), "data", "dependencies", "zero_commits.json")
 
     # 1) Load zero_commits.json and convert to Dict
     zero_mapping = {}
@@ -210,7 +255,7 @@ def get_vulnerable_projects_with_commits(vulnerable_projects):
                     url, commit_hash = entry[0], entry[1]
                     zero_mapping[url] = commit_hash
         except Exception as e:
-            logging.error(f"Fehler beim Laden von zero_commits.json: {e}")
+            logging.info(f"Fehler beim Laden von zero_commits.json: {e}")
 
     # 2) Collect commits for each vulnerable project
     for project_name, project_url in vulnerable_projects:
@@ -239,18 +284,18 @@ def get_vulnerable_projects_with_commits(vulnerable_projects):
                                 commits.append(replacement)
                                 logging.info(f"Ersetze Commit '0' durch '{replacement}' für {project_name}")
                         else:
-                            logging.warning(f"Kein Ersatz-Commit für '0' gefunden in zero_commits.json für {project_url}")
+                            logging.info(f"Kein Ersatz-Commit für '0' gefunden in zero_commits.json für {project_url}")
                 # Tuple erzeugen (mit oder ohne Commits)
                 if commits:
                     vulnerable_projects_with_commits.append((project_name, project_url, *commits))
                 else:
                     vulnerable_projects_with_commits.append((project_name, project_url))
             except Exception as e:
-                logging.error(f"Fehler beim Laden der Vulnerabilities für {project_name}: {e}")
+                logging.info(f"Fehler beim Laden der Vulnerabilities für {project_name}: {e}")
                 vulnerable_projects_with_commits.append((project_name, project_url))
         else:
             # keine JSON-Datei vorhanden
-            logging.warning(f"Vulnerabilities-Datei nicht gefunden: {json_path}")
+            logging.info(f"Vulnerabilities-Datei nicht gefunden: {json_path}")
             vulnerable_projects_with_commits.append((project_name, project_url))
 
     return vulnerable_projects_with_commits
@@ -296,7 +341,7 @@ def get_clang_dependencies():
         try:
             os.remove(os.path.join(current_dir, archive_name))
         except Exception as e:
-            logging.warning(f"Fehler beim Löschen des Archivs {archive_name}: {e}")
+            logging.info(f"Fehler beim Löschen des Archivs {archive_name}: {e}")
 
     # Binärpaket (.tar.xz)
     download_and_extract(
@@ -318,3 +363,47 @@ def get_clang_dependencies():
         "binary_dir": bin_target,
         "source_dir": src_target
     }
+
+def delete_unfixable_broken_commits():
+    """
+    Remove vulnerabilities whose introduced_commit appears in the unfixable_broken_commits list.
+    Iterates over each JSON file in data/vulns, filters out entries matching unfixable commits,
+    and deletes the file if no entries remain.
+    """
+    cwd = os.getcwd()
+    vulns_dir = os.path.join(cwd, "data", "vulns")
+    ubc_path = os.path.join(cwd, "data", "dependencies", "unfixable_broken_commits.json")
+    # Load unfixable broken commits mapping: project_name -> set of commits
+    ubc_map = {}
+    if os.path.exists(ubc_path):
+        try:
+            with open(ubc_path, "r", encoding="utf-8") as f:
+                ubc_list = json.load(f)
+            for proj, commit in ubc_list:
+                ubc_map.setdefault(proj, set()).add(commit)
+        except Exception as e:
+            logging.info(f"Fehler beim Laden von unfixable_broken_commits: {e}")
+            return
+    else:
+        logging.info(f"Datei unfixable_broken_commits nicht gefunden: {ubc_path}")
+        return
+    # Process each vulnerability file
+    for fname in os.listdir(vulns_dir):
+        if not fname.endswith('.json'):
+            continue
+        proj = fname[:-5]
+        path = os.path.join(vulns_dir, fname)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                entries = json.load(f)
+            # Filter out unfixable entries
+            filtered = [e for e in entries if not (proj in ubc_map and e.get('introduced_commit') in ubc_map[proj])]
+            if filtered:
+                with open(path, "w", encoding="utf-8") as out:
+                    json.dump(filtered, out, indent=2, ensure_ascii=False)
+                logging.info(f"Aktualisiert: {path}, {len(entries)-len(filtered)} Einträge entfernt.")
+            else:
+                os.remove(path)
+                logging.info(f"Gelöscht leere Datei: {path}")
+        except Exception as e:
+            logging.info(f"Fehler beim Verarbeiten von {path}: {e}")

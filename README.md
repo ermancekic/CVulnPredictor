@@ -1,6 +1,6 @@
 <img src="Logo.png" alt="Logo" width="200">
 
-# Software Metrics as Targeting Strategies for Directed Fuzzing
+# CVulnPredictor
 
 This code was developed as part of my Bachelor's thesis on evaluating software metrics as targeting strategies for directed fuzzing in OSS-Fuzz projects.
 
@@ -18,5 +18,9 @@ The system:
 The goal is to determine which software metrics are most effective at identifying potentially vulnerable code sections for directed fuzzing campaigns.
 
 ## Dependencies
+- python3
+- python3-pip
+- python3-venv
+- git
 
 ## Usage

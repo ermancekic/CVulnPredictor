@@ -1,0 +1,20 @@
+[
+  {
+    "id": "OSV-2024-1056",
+    "oss-id": "42538161",
+    "introduced_commit": "80f2ae843a3c0968b34db51e4bb62a4610fa685d",
+    "revision_url": "https:\/\/oss-fuzz.com\/revisions?job=libfuzzer_asan_binutils&range=202408250602:202408260621"
+  },
+  {
+    "id": "OSV-2023-1324",
+    "oss-id": "65104",
+    "introduced_commit": "e20298da05f212c04022c4f1a9991e09e2199c9a",
+    "revision_url": "https:\/\/oss-fuzz.com\/revisions?job=libfuzzer_asan_binutils&range=202312140630:202312150629"
+  },
+  {
+    "id": "OSV-2025-260",
+    "oss-id": "408254000",
+    "introduced_commit": "80f2ae843a3c0968b34db51e4bb62a4610fa685d",
+    "revision_url": "https:\/\/oss-fuzz.com\/revisions?job=libfuzzer_asan_binutils&range=202408250602:202408260621"
+  }
+]

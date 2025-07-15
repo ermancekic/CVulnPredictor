@@ -47,7 +47,7 @@ def separate_and_filter_calculated_metrics(thresholds):
                 metrics_data = json.load(f)
             logging.info(f"Processing file: {entry}")
         except Exception as e:
-            logging.error(f"Fehler beim Lesen von {input_path}: {e}")
+            logging.info(f"Fehler beim Lesen von {input_path}: {e}")
             continue
 
         # Sammelstruktur: metric_name -> file_name -> function_name -> {metric_name: value}
@@ -69,7 +69,7 @@ def separate_and_filter_calculated_metrics(thresholds):
                 with open(out_path, 'w', encoding='utf-8') as f_out:
                     json.dump(file_dict, f_out, indent=2, ensure_ascii=False)
             except Exception as e:
-                logging.error(f"Fehler beim Schreiben von {out_path}: {e}")
+                logging.info(f"Fehler beim Schreiben von {out_path}: {e}")
 
 def check_if_function_in_vulns():
     """
@@ -119,6 +119,12 @@ def check_if_function_in_vulns():
                 v for v in project_vulns
                 if v.get("introduced_commit") == commit_hash
             ]
+            
+            for v in project_vulns:
+                if v.get("introduced_commit") is None:
+                    logging.info(f"Vulnerability {v.get('id')} in {project_name} has no introduced commit, skipping.")
+                    continue
+            
             if not vulns_for_commit:
                 continue
 
@@ -146,7 +152,7 @@ def check_if_function_in_vulns():
                     with open(output_path, 'w', encoding='utf-8') as fout:
                         json.dump(matches, fout, indent=2, ensure_ascii=False)
                 except Exception as e:
-                    logging.error(f"Fehler beim Schreiben der Output-Datei {output_path}: {e}")
+                    logging.info(f"Fehler beim Schreiben der Output-Datei {output_path}: {e}")
 
 def calculate_infos():
     """

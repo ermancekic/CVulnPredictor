@@ -46,22 +46,22 @@ import modules.calculate_results
 
 # Thresholds for filtering metrics
 thresholds = {
-    # "lines of code": -1,
-    # "cyclomatic complexity": -1,
-    # "number of loops": -1,
-    # "number of nested loops": -1,
-    # "max nesting loop depth": -1,
+    "lines of code": -1,
+    "cyclomatic complexity": -1,
+    "number of loops": -1,
+    "number of nested loops": -1,
+    "max nesting loop depth": -1,
     "number of parameter variables": -1,
-    # "number of callee parameter variables": -1,
-    # "number of pointer arithmetic": -1,
-    # "number of variables involved in pointer arithmetic": -1,
-    # "max pointer arithmetic variable is involved in": -1,
-    # "number of nested control structures": -1,
-    # "maximum nesting level of control structures": -1,
-    # "maximum of control dependent control structures": -1,
-    # "maximum of data dependent control structures": -1,
-    # "number of if structures without else": -1,
-    # "number of variables involved in control predicates": -1
+    "number of callee parameter variables": -1,
+    "number of pointer arithmetic": -1,
+    "number of variables involved in pointer arithmetic": -1,
+    "max pointer arithmetic variable is involved in": -1,
+    "number of nested control structures": -1,
+    "maximum nesting level of control structures": -1,
+    "maximum of control dependent control structures": -1,
+    "maximum of data dependent control structures": -1,
+    "number of if structures without else": -1,
+    "number of variables involved in control predicates": -1
 }
 
 
@@ -99,7 +99,7 @@ def clone_project(project_tuple):
         return project_name, commits
     except Exception as e:
         tb = traceback.format_exc()
-        logging.error(f"Error cloning {project_name}: {e}\n{tb}")
+        logging.info(f"Error cloning {project_name}: {e}\n{tb}")
         return project_name, None
 
 def calculate_metrics(project_path):
@@ -123,7 +123,7 @@ def calculate_metrics(project_path):
         tb = traceback.format_exc()
 
         # 1) Log in der Konsole/file via eigenem Logger
-        logger.error(f"Metrics error for {project_dir}: {e}\n{tb}")
+        logger.info(f"Metrics error for {project_dir}: {e}\n{tb}")
 
         # 2) (optional) zusätzlich in einer JSON-Datei ablegen
         os.makedirs("logs/metrics_json_errors", exist_ok=True)
@@ -163,14 +163,20 @@ def main():
     vulnerable = modules.retrieve_oss_fuzz_data.get_project_tuples_with_vulns()
     print_json(vulnerable, os.path.join(work_path, "data/general/vulnerable_oss_projects.json"))
     modules.retrieve_oss_fuzz_data.get_oss_vulns_data_as_json(vulnerable)
+    modules.retrieve_oss_fuzz_data.update_missing_commits_in_vulns()
+    modules.prepare_projects.delete_unfixable_broken_commits()
 
     # Extract commits
     vulns_with_commits = modules.prepare_projects.get_vulnerable_projects_with_commits(vulnerable)
     logging.info(f"Found {len(vulns_with_commits)} vulnerable projects with commits.")
+    # Only include projects that have at least one commit
+    filtered_vulns_with_commits = [proj for proj in vulns_with_commits if len(proj) > 2 and proj[2:]]
     print_json(
-        [{"projectName": p, "projectUrl": u, "commits": commits} for p, u, *commits in vulns_with_commits],
+        [{"projectName": p, "projectUrl": u, "commits": commits}
+         for p, u, *commits in filtered_vulns_with_commits],
         os.path.join(work_path, "data/general/vulns_projects_with_commits.json")
     )
+    vulns_with_commits = filtered_vulns_with_commits
 
     # Phase 1: Clone all projects in parallel
     clone_results = []
@@ -195,7 +201,6 @@ def main():
                 future.result()
             except Exception as e:
                 print(f"Fehler bei Projekt: {e}")
-
 
     # Final result calculations
     modules.calculate_results.separate_and_filter_calculated_metrics(thresholds)

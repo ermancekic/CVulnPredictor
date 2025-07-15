@@ -10,9 +10,13 @@ __pycache__/
 # data and repositories directories
 data/metrics/
 data/single-metrics/
+data/found-methods/
+data/debug_reports/
 data/vulns/
 data/general/
 repositories/
+ARVO/
+arvo.db
 
 crashminer/
 venv/

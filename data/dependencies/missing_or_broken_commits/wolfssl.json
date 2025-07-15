@@ -1,0 +1,8 @@
+[
+  {
+    "id": "OSV-2022-840",
+    "oss-id": "50953",
+    "introduced_commit": "daadd4a1b75954f2a5c55c38f736fd82cfa39ef6",
+    "revision_url": "https:\/\/oss-fuzz.com\/revisions?job=libfuzzer_asan_i386_wolfssl&range=202209020609:202209030602"
+  }
+]
