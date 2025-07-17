@@ -6,8 +6,19 @@ Provides detailed printing for binary operators and general AST traversal.
 """
 
 import sys
+import os
+clang_path   = os.path.abspath(os.path.join(os.getcwd(), "llvm-project-llvmorg-20.1.8", "clang", "bindings", "python"))
+sys.path.insert(0, clang_path)
+
 from clang import cindex
-from clang.cindex import CursorKind, TokenKind
+from clang.cindex import TokenKind, CursorKind, TypeKind
+
+libclang_path =  os.path.abspath(os.path.join(os.getcwd(), "LLVM-20.1.8-Linux-X64", "lib", "libclang.so"))
+cindex.Config.set_library_file(libclang_path)
+cindex.Config.set_compatibility_check(False)
+
+cindex.Config.set_library_path(libclang_path)
+
 
 def print_node(node, indent=0):
     """

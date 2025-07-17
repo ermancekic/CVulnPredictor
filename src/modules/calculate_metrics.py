@@ -100,7 +100,7 @@ def get_source_files(source_path):
 
     return source_files
 
-def parse_file(source_file):
+def parse_file(source_file, project_name):
     """
     Parse a C/C++ source file into a Clang TranslationUnit.
 
@@ -112,6 +112,17 @@ def parse_file(source_file):
     """
     try:
         args = ['-std=c++17', '-x', 'c++'] if source_file.lower().endswith(('.cpp', '.cc', '.cxx', '.hpp', '.h')) else ['-std=c11', '-x', 'c']
+        # Load project-specific include directories
+        includes_file = os.path.join(os.getcwd(), 'data', 'includes', f"{project_name}.json")
+        if os.path.exists(includes_file):
+            try:
+                with open(includes_file, 'r', encoding='utf-8') as inc_f:
+                    headers = json.load(inc_f)
+                include_dirs = set(os.path.dirname(header) for header in headers)
+                for inc_dir in include_dirs:
+                    args.extend(['-I', inc_dir])
+            except Exception as e:
+                logging.info(f"Fehler beim Laden der Include-Pfade für {project_name}: {e}")
         tu = index.parse(source_file, args)
     except Exception as e:
         print(f"Failed to parse {source_file}: {e}", file=sys.stderr)
@@ -973,7 +984,7 @@ def run(source_path, skip_existing=False):
         return
 
     for source_file in source_files:
-        tu = parse_file(source_file)
+        tu = parse_file(source_file, project_name)
         if tu is None:
             continue  # Skip files that failed to parse
         cursor = tu.cursor
@@ -989,7 +1000,7 @@ def run(source_path, skip_existing=False):
                     method_name = get_method_name(c)
                     loc = calculate_loc(c)
                 
-                    # # Leopard C
+                    # Leopard C
                     cyclomatic_complexity  = calculate_cyclomatic_complexity(c)
                     number_of_loops = calculate_number_of_loops(c)
                     number_of_nested_loops = calculate_number_of_nested_loops(c)

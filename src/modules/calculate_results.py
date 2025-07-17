@@ -153,6 +153,34 @@ def check_if_function_in_vulns():
                         json.dump(matches, fout, indent=2, ensure_ascii=False)
                 except Exception as e:
                     logging.info(f"Fehler beim Schreiben der Output-Datei {output_path}: {e}")
+            # Compute and write missing vulnerabilities for debugging
+            # Determine found IDs
+            found_ids = {
+                vuln_info['id']
+                for funcs in matches.values()
+                for vulns_list in funcs.values()
+                for vuln_info in vulns_list
+                if 'id' in vuln_info
+            }
+            # Identify vulnerabilities not matched
+            missing_vulns = [
+                v for v in vulns_for_commit
+                if v.get('id') not in found_ids
+            ]
+
+            missing_output_path = os.path.join(os.getcwd(), "data", "not-found-methods")
+            os.makedirs(missing_output_path, exist_ok=True)
+
+            if missing_vulns:
+                missing_output_path = os.path.join(
+                    missing_output_path,
+                    f"{project_name}_{commit_hash}_missing.json"
+                )
+                try:
+                    with open(missing_output_path, 'w', encoding='utf-8') as fmiss:
+                        json.dump(missing_vulns, fmiss, indent=2, ensure_ascii=False)
+                except Exception as e:
+                    logging.info(f"Fehler beim Schreiben der Missing-Datei {missing_output_path}: {e}")
 
 def calculate_infos():
     """

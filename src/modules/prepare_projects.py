@@ -407,3 +407,29 @@ def delete_unfixable_broken_commits():
                 logging.info(f"Gelöscht leere Datei: {path}")
         except Exception as e:
             logging.info(f"Fehler beim Verarbeiten von {path}: {e}")
+
+def get_project_includes():
+    logging.info("Erzeuge Include-Listen für OSS-Projects...")
+    cwd = os.getcwd()
+    includes_path = os.path.join(cwd, "data", "includes")
+    os.makedirs(includes_path, exist_ok=True)
+    oss_projects_path = os.path.join(cwd, "repositories", "OSS-Projects")
+    
+    for entry in os.listdir(oss_projects_path):
+        project_dir = os.path.join(oss_projects_path, entry)
+        if not os.path.isdir(project_dir):
+            continue
+        includes = []
+        for root, dirs, files in os.walk(project_dir):
+            for file in files:
+                if file.endswith('.h'):
+                    # Use absolute paths for includes
+                    abs_path = os.path.abspath(os.path.join(root, file))
+                    includes.append(abs_path)
+        output_file = os.path.join(includes_path, f"{entry}.json")
+        try:
+            with open(output_file, 'w', encoding='utf-8') as out_f:
+                json.dump(includes, out_f, indent=2, ensure_ascii=False)
+            logging.info(f"Includes für Projekt {entry} in {output_file} geschrieben.")
+        except Exception as e:
+            logging.info(f"Fehler beim Schreiben der Include-Datei für {entry}: {e}")

@@ -115,7 +115,7 @@ def calculate_metrics(project_path):
     project_dir = os.path.basename(project_path)
     try:
         logging.info(f"Running metrics for {project_dir}...")
-        modules.calculate_metrics.run(project_path, True)
+        modules.calculate_metrics.run(project_path, False)
         return project_dir, True
 
     except Exception as e:
@@ -187,11 +187,13 @@ def main():
         for fut in concurrent.futures.as_completed(futures):
             clone_results.append(fut.result())
 
+    modules.prepare_projects.get_project_includes()
+
     projects = []
     base_dir = os.path.join(os.getcwd(), "repositories", "OSS-Projects")
     for entry in os.listdir(base_dir):
         projects.append(os.path.join(base_dir, entry))
-    print("Anzahl geklonter Projekte: ", len(projects))
+    print("Anzahl geklonter Projekte: ", len(os.listdir(base_dir)))
 
     # Phase 2: Calculate metrics
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as pool:

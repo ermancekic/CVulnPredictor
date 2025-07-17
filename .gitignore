@@ -12,8 +12,10 @@ data/metrics/
 data/single-metrics/
 data/found-methods/
 data/debug_reports/
+data/not-found-methods/
 data/vulns/
 data/general/
+data/includes/
 repositories/
 ARVO/
 arvo.db
