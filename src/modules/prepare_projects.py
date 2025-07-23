@@ -12,6 +12,7 @@ import subprocess
 import yaml
 import logging
 import shutil
+import traceback
 
 def prepare_directories():
     """
@@ -50,7 +51,11 @@ def prepare_directories():
         os.path.join(current_dir, "data", "single-metrics", "maximum of data dependent control structures"),
         os.path.join(current_dir, "data", "single-metrics", "number of if structures without else"),
         os.path.join(current_dir, "data", "single-metrics", "number of variables involved in control predicates"),
-
+        os.path.join(current_dir, "data", "found-methods"),
+        os.path.join(current_dir, "data", "not-found-methods"),
+        os.path.join(current_dir, "data", "missing_commits"),
+        os.path.join(current_dir, "data", "debug_reports"),
+        os.path.join(current_dir, "logs", "cloning_errors"),
     ]
 
     for directory in directories:
@@ -138,96 +143,72 @@ def get_oss_projects(project_tuple):
     Returns:
         None
     """
-    
     oss_projects_path = os.path.join(os.getcwd(), "repositories", "OSS-Projects")
-    if not os.path.exists(oss_projects_path):
-        os.mkdir(oss_projects_path)
-    
+    os.makedirs(oss_projects_path, exist_ok=True)
+
     project_name = project_tuple[0]
     project_url = project_tuple[1]
     commits = list(project_tuple[2:]) if len(project_tuple) > 2 else []
-    
-    # Ensure logs directory exists for error logs
+
+    # Ensure logs directory and cloning_errors subdirectory exist for error logs
     logs_dir = os.path.join(os.getcwd(), "logs")
-    if not os.path.exists(logs_dir):
-        os.makedirs(logs_dir)
-    
-    if not commits:
-        project_dir = os.path.join(oss_projects_path, project_name)
-        if os.path.exists(project_dir):
-            logging.info(f"Projekt {project_name} existiert bereits, überspringe Klonen...")
-            return
-        logging.info(f"Klone Projekt {project_name}...")
-        cmd = ["git", "clone", project_url, project_dir]
+    cloning_errors_dir = os.path.join(logs_dir, "cloning_errors")
+
+    # Check for each commit if the project already exists
+    all_commits_exist = True
+    missing_commits = []
+    for commit in commits:
+        commit_dir = os.path.join(oss_projects_path, f"{project_name}_{commit}")
+        if not os.path.exists(commit_dir):
+            all_commits_exist = False
+            missing_commits.append(commit)
+    if all_commits_exist:
+        logging.info(f"Projekt {project_name} mit allen {len(commits)} Commits existiert bereits, überspringe Klonen...")
+        return
+
+    for commit in missing_commits:
+        commit_dir = os.path.join(oss_projects_path, f"{project_name}_{commit}")
+        logging.info(f"Klone {project_name} für Commit {commit}...")
         try:
-            subprocess.run(cmd, check=True, capture_output=True, text=True)
-        except subprocess.CalledProcessError as e:
-            logging.info(f"Fehler beim Klonen von {project_name}: {e}")
-            # Write detailed error into log file
-            error_log = os.path.join(logs_dir, f"{project_name}.log")
-            with open(error_log, 'a', encoding='utf-8') as lf:
-                lf.write(f"[CLONE ERROR] {project_name}: returncode={e.returncode}\nSTDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}\n")
-            # Entferne unvollständiges Verzeichnis
-            try:
-                shutil.rmtree(project_dir, ignore_errors=True)
-                logging.info(f"Unvollständiger Ordner {project_dir} wurde gelöscht.")
-            except Exception as rm_e:
-                logging.info(f"Fehler beim Löschen von {project_dir}: {rm_e}")
-            return
-        except Exception as e:
-            logging.info(f"Fehler beim Klonen von {project_name}: {e}")
-            # Write generic error
-            error_log = os.path.join(logs_dir, f"{project_name}.log")
-            with open(error_log, 'a', encoding='utf-8') as lf:
-                lf.write(f"[CLONE EXCEPTION] {project_name}: {e}\n")
-            try:
-                shutil.rmtree(project_dir, ignore_errors=True)
-                logging.info(f"Unvollständiger Ordner {project_dir} wurde gelöscht.")
-            except Exception as rm_e:
-                logging.info(f"Fehler beim Löschen von {project_dir}: {rm_e}")
-            return
-    else:
-        # Check for each commit if the project already exists
-        all_commits_exist = True
-        missing_commits = []
-        for commit in commits:
-            commit_dir = os.path.join(oss_projects_path, f"{project_name}_{commit}")
-            if not os.path.exists(commit_dir):
-                all_commits_exist = False
-                missing_commits.append(commit)
-        if all_commits_exist:
-            logging.info(f"Projekt {project_name} mit allen {len(commits)} Commits existiert bereits, überspringe Klonen...")
-            return
-        for commit in missing_commits:
-            commit_dir = os.path.join(oss_projects_path, f"{project_name}_{commit}")
-            logging.info(f"Klone {project_name} für Commit {commit}...")
-            try:
-                # clone and checkout specific commit, capture output
+            # Clone and checkout specific commit, capturing output
+            # subprocess.run(["git", "clone", "--recursive", project_url, commit_dir], check=True, capture_output=True, text=True)
+            # subprocess.run(["git", "-C", commit_dir, "fetch", "origin", commit], check=True, capture_output=True, text=True)
+            # subprocess.run(["git", "-C", commit_dir, "checkout", commit], check=True, capture_output=True, text=True)
+
+            if project_name == "cryptofuzz":
                 subprocess.run(["git", "clone", project_url, commit_dir], check=True, capture_output=True, text=True)
                 subprocess.run(["git", "-C", commit_dir, "fetch", "origin", commit], check=True, capture_output=True, text=True)
                 subprocess.run(["git", "-C", commit_dir, "checkout", commit], check=True, capture_output=True, text=True)
-            except subprocess.CalledProcessError as e:
-                logging.info(f"Fehler beim Klonen/Fetch/Checkout für {project_name}:{commit}: {e}")
-                # Write detailed error into log
-                error_log = os.path.join(logs_dir, f"{project_name}_{commit}.log")
-                with open(error_log, 'a', encoding='utf-8') as lf:
-                    lf.write(f"[COMMIT ERROR] {project_name}:{commit} returncode={e.returncode}\nSTDOUT:\n{e.stdout}\nSTDERR:\n{e.stderr}\n")
-                # Lösche unvollständiges Commit-Verzeichnis
-                try:
-                    shutil.rmtree(commit_dir, ignore_errors=True)
-                    logging.info(f"Unvollständiger Ordner {commit_dir} wurde gelöscht.")
-                except Exception as rm_e:
-                    logging.info(f"Fehler beim Löschen von {commit_dir}: {rm_e}")
-            except Exception as e:
-                logging.info(f"Fehler beim Klonen/Fetch/Checkout für {project_name}:{commit}: {e}")
-                error_log = os.path.join(logs_dir, f"{project_name}_{commit}.log")
-                with open(error_log, 'a', encoding='utf-8') as lf:
-                    lf.write(f"[COMMIT EXCEPTION] {project_name}:{commit}: {e}\n")
-                try:
-                    shutil.rmtree(commit_dir, ignore_errors=True)
-                    logging.info(f"Unvollständiger Ordner {commit_dir} wurde gelöscht.")
-                except Exception as rm_e:
-                    logging.info(f"Fehler beim Löschen von {commit_dir}: {rm_e}")
+            else:
+
+                # 1. Clone repository without checking out to avoid populating the working tree
+                subprocess.run(["git", "clone", "--recursive", "--no-checkout", project_url, commit_dir], check=True, capture_output=True, text=True)
+                # 2. Fetch only the specific commit (depth=1) to minimize history download
+                subprocess.run(["git", "-C", commit_dir, "fetch", "--depth", "1", "origin", commit], check=True, capture_output=True, text=True)
+                # 3. Checkout the fetched commit directly by its hash
+                subprocess.run(["git", "-C", commit_dir, "checkout", commit], check=True, capture_output=True, text=True)
+                # 4. Initialize and update all submodules recursively to match the checked-out commit
+                subprocess.run(["git", "-C", commit_dir, "submodule", "update", "--init", "--recursive"], check=True, capture_output=True, text=True)
+
+
+        except subprocess.CalledProcessError as cpe:
+            error_log = os.path.join(cloning_errors_dir, f"{project_name}_{commit}.log")
+            tb = traceback.format_exc()
+            with open(error_log, 'a', encoding='utf-8') as lf:
+                lf.write(f"[CALLEDPROCESSERROR] {project_name}:{commit} return code={cpe.returncode}\n")
+                lf.write(f"stdout:\n{cpe.stdout}\n")
+                lf.write(f"stderr:\n{cpe.stderr}\n")
+                lf.write(f"Traceback:\n{tb}\n")
+            shutil.rmtree(commit_dir, ignore_errors=True)
+            logging.info(f"Unvollständiger Ordner {commit_dir} wurde gelöscht.")
+        except Exception as e:
+            error_log = os.path.join(cloning_errors_dir, f"{project_name}_{commit}.log")
+            tb = traceback.format_exc()
+            with open(error_log, 'a', encoding='utf-8') as lf:
+                lf.write(f"[EXCEPTION] {project_name}:{commit}: {e}\n")
+                lf.write(f"Traceback:\n{tb}\n")
+            shutil.rmtree(commit_dir, ignore_errors=True)
+            logging.info(f"Unvollständiger Ordner {commit_dir} wurde gelöscht.")
          
 def get_vulnerable_projects_with_commits(vulnerable_projects):
     """
@@ -419,10 +400,15 @@ def get_project_includes():
         project_dir = os.path.join(oss_projects_path, entry)
         if not os.path.isdir(project_dir):
             continue
+        # Skip if includes JSON already exists
+        output_file = os.path.join(includes_path, f"{entry}.json")
+        if os.path.exists(output_file):
+            logging.info(f"Includes für Projekt {entry} existieren bereits, überspringe.")
+            continue
         includes = []
         for root, dirs, files in os.walk(project_dir):
             for file in files:
-                if file.endswith('.h'):
+                if file.endswith(('.h', '.hpp')):
                     # Use absolute paths for includes
                     abs_path = os.path.abspath(os.path.join(root, file))
                     includes.append(abs_path)

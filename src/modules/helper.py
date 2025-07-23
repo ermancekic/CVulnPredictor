@@ -17,7 +17,6 @@ def get_missing_commits_in_vulns():
     path_to_vulns = os.path.join(cwd, "data", "vulns")
     # Directory to store missing commit entries
     missing_dir = os.path.join(cwd, "data", "missing_commits")
-    os.makedirs(missing_dir, exist_ok=True)
 
     # Iterate through each project JSON file
     for fname in os.listdir(path_to_vulns):
@@ -76,7 +75,6 @@ def get_revision_url():
 
                     # Save the raw HTML of the OSS-Fuzz report for debugging if needed
                     debug_dir = os.path.join(cwd, "data", "debug_reports")
-                    os.makedirs(debug_dir, exist_ok=True)
                     debug_path = os.path.join(debug_dir, f"{oss_id}.html")
                     with open(debug_path, "w", encoding="utf-8") as debug_file:
                         debug_file.write(text)

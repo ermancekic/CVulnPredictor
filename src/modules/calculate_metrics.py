@@ -12,6 +12,8 @@ import sys
 import ujson as json
 import logging
 import traceback
+import re
+import shutil
 
 clang_path   = os.path.abspath(os.path.join(os.getcwd(), "llvm-project-llvmorg-20.1.8", "clang", "bindings", "python"))
 logging.info(f"clang_path: {clang_path}")
@@ -111,21 +113,51 @@ def parse_file(source_file, project_name):
         cindex.TranslationUnit | None: The parsed translation unit, or None on failure.
     """
     try:
+        # Determine language args
         args = ['-std=c++17', '-x', 'c++'] if source_file.lower().endswith(('.cpp', '.cc', '.cxx', '.hpp', '.h')) else ['-std=c11', '-x', 'c']
-        # Load project-specific include directories
+        # Scan source for includes
+        include_pattern = re.compile(r'#\s*include\s*[<\"]([^\">]+)[\">]')
+        include_names = set()
+        try:
+            # Open source with error-ignore to handle non-UTF8 bytes
+            with open(source_file, 'r', encoding='utf-8', errors='ignore') as src_f:
+                for line in src_f:
+                    m = include_pattern.search(line)
+                    if m:
+                        include_names.add(m.group(1))
+        except Exception as e:
+            logging.info(f"Error reading includes from {source_file}: {e}")
+        # Load project-specific include paths and match headers
         includes_file = os.path.join(os.getcwd(), 'data', 'includes', f"{project_name}.json")
+        missing = []
         if os.path.exists(includes_file):
             try:
                 with open(includes_file, 'r', encoding='utf-8') as inc_f:
                     headers = json.load(inc_f)
-                include_dirs = set(os.path.dirname(header) for header in headers)
-                for inc_dir in include_dirs:
+                matched_dirs = set()
+                for inc_name in include_names:
+                    matches = [h for h in headers if os.path.basename(h) == inc_name]
+                    if matches:
+                        for h in matches:
+                            matched_dirs.add(os.path.dirname(h))
+                    else:
+                        missing.append(inc_name)
+                # Add include directories for matched headers
+                for inc_dir in matched_dirs:
                     args.extend(['-I', inc_dir])
+                # Log missing includes
+                if missing:
+                    missing_dir = os.path.join(os.getcwd(), 'logs', 'missing_includes', project_name)
+                    os.makedirs(missing_dir, exist_ok=True)
+                    missing_file = os.path.join(missing_dir, f"{os.path.basename(source_file)}.json")
+                    with open(missing_file, 'w', encoding='utf-8') as mf:
+                        json.dump(missing, mf, indent=2)
             except Exception as e:
                 logging.info(f"Fehler beim Laden der Include-Pfade für {project_name}: {e}")
+        # Parse translation unit with matched include paths
         tu = index.parse(source_file, args)
     except Exception as e:
-        print(f"Failed to parse {source_file}: {e}", file=sys.stderr)
+        logging.getLogger("metrics_error_logger").error(f"Failed to parse {source_file}: {e}")
         return None
         
     return tu
@@ -975,6 +1007,11 @@ def run(source_path, skip_existing=False):
     source_files = get_source_files(source_path)
 
     project_name = get_project_name(source_path)
+    # Clear old missing_includes logs for this project
+    missing_root = os.path.join(os.getcwd(), 'logs', 'missing_includes', project_name)
+    if os.path.isdir(missing_root):
+        shutil.rmtree(missing_root)
+    # Ensure metrics output directory
     metrics_dir = os.path.join(os.getcwd(), "data", "metrics")
     output_file = f"{project_name}.json"
     destination_path = os.path.join(metrics_dir, output_file)
@@ -998,48 +1035,48 @@ def run(source_path, skip_existing=False):
             if is_function_like(c):
                 try:
                     method_name = get_method_name(c)
-                    loc = calculate_loc(c)
+                    # loc = calculate_loc(c)
                 
                     # Leopard C
-                    cyclomatic_complexity  = calculate_cyclomatic_complexity(c)
-                    number_of_loops = calculate_number_of_loops(c)
-                    number_of_nested_loops = calculate_number_of_nested_loops(c)
-                    max_nesting_loop_depth = calculate_max_nesting_loop_depth(c)
+                    # cyclomatic_complexity  = calculate_cyclomatic_complexity(c)
+                    # number_of_loops = calculate_number_of_loops(c)
+                    # number_of_nested_loops = calculate_number_of_nested_loops(c)
+                    # max_nesting_loop_depth = calculate_max_nesting_loop_depth(c)
                     
                     # Leopard V
                     number_of_parameter_variables = calculate_number_of_parameter_variables(c)
-                    number_of_callee_parameter_variables = calculate_number_of_callee_parameter_variables(c)
-                    number_of_pointer_arithmetic = calculate_number_of_pointer_arithmetic(c)
-                    number_of_variables_involved_in_pointer_arithmetic = calculate_number_of_variables_involved_in_pointer_arithmetic(c)
-                    max_pointer_arithmetic_variable_is_involved_in = calculate_max_pointer_arithmetic_variable_is_involved_in(c)
-                    number_of_nested_control_structures = calculate_number_of_nested_control_structures(c)
-                    maximum_nesting_level_of_control_structures = calculate_maximum_nesting_level_of_control_structures(c)
-                    maximum_of_control_dependent_control_structures = calculate_maximum_of_control_dependent_control_structures(c)
-                    maximum_of_data_dependent_control_structures = calculate_maximum_of_data_dependent_control_structures(c)
-                    number_of_if_structures_without_else = calculate_number_of_if_structures_without_else(c)
-                    number_of_variables_involved_in_control_predicates = calculate_number_of_variables_involved_in_control_predicates(c)
+                    # number_of_callee_parameter_variables = calculate_number_of_callee_parameter_variables(c)
+                    # number_of_pointer_arithmetic = calculate_number_of_pointer_arithmetic(c)
+                    # number_of_variables_involved_in_pointer_arithmetic = calculate_number_of_variables_involved_in_pointer_arithmetic(c)
+                    # max_pointer_arithmetic_variable_is_involved_in = calculate_max_pointer_arithmetic_variable_is_involved_in(c)
+                    # number_of_nested_control_structures = calculate_number_of_nested_control_structures(c)
+                    # maximum_nesting_level_of_control_structures = calculate_maximum_nesting_level_of_control_structures(c)
+                    # maximum_of_control_dependent_control_structures = calculate_maximum_of_control_dependent_control_structures(c)
+                    # maximum_of_data_dependent_control_structures = calculate_maximum_of_data_dependent_control_structures(c)
+                    # number_of_if_structures_without_else = calculate_number_of_if_structures_without_else(c)
+                    # number_of_variables_involved_in_control_predicates = calculate_number_of_variables_involved_in_control_predicates(c)
                 except Exception as e:
                     logging.info(f"Error for {c.displayname} in {source_file}: {e}")
                     logging.info(f"Stack trace: {traceback.format_exc()}")
                     continue
 
                 solution[source_file][method_name] = {
-                    'lines of code': loc,
-                    'cyclomatic complexity': cyclomatic_complexity,
-                    'number of loops': number_of_loops,
-                    'number of nested loops': number_of_nested_loops,
-                    'max nesting loop depth': max_nesting_loop_depth,
+                    # 'lines of code': loc,
+                    # 'cyclomatic complexity': cyclomatic_complexity,
+                    # 'number of loops': number_of_loops,
+                    # 'number of nested loops': number_of_nested_loops,
+                    # 'max nesting loop depth': max_nesting_loop_depth,
                     'number of parameter variables': number_of_parameter_variables,
-                    'number of callee parameter variables': number_of_callee_parameter_variables,
-                    'number of pointer arithmetic' : number_of_pointer_arithmetic,
-                    'number of variables involved in pointer arithmetic': number_of_variables_involved_in_pointer_arithmetic,
-                    'max pointer arithmetic variable is involved in': max_pointer_arithmetic_variable_is_involved_in,
-                    'number of nested control structures': number_of_nested_control_structures,
-                    'maximum nesting level of control structures': maximum_nesting_level_of_control_structures,
-                    'maximum of control dependent control structures': maximum_of_control_dependent_control_structures,
-                    'maximum of data dependent control structures': maximum_of_data_dependent_control_structures,
-                    'number of if structures without else': number_of_if_structures_without_else,
-                    'number of variables involved in control predicates': number_of_variables_involved_in_control_predicates
+                    # 'number of callee parameter variables': number_of_callee_parameter_variables,
+                    # 'number of pointer arithmetic' : number_of_pointer_arithmetic,
+                    # 'number of variables involved in pointer arithmetic': number_of_variables_involved_in_pointer_arithmetic,
+                    # 'max pointer arithmetic variable is involved in': max_pointer_arithmetic_variable_is_involved_in,
+                    # 'number of nested control structures': number_of_nested_control_structures,
+                    # 'maximum nesting level of control structures': maximum_nesting_level_of_control_structures,
+                    # 'maximum of control dependent control structures': maximum_of_control_dependent_control_structures,
+                    # 'maximum of data dependent control structures': maximum_of_data_dependent_control_structures,
+                    # 'number of if structures without else': number_of_if_structures_without_else,
+                    # 'number of variables involved in control predicates': number_of_variables_involved_in_control_predicates
                 }
                 
     print_json(solution, source_path)

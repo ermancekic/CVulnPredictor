@@ -23,4 +23,9 @@ The goal is to determine which software metrics are most effective at identifyin
 - python3-venv
 - git
 
-## Usage
+## Run the pipeline
+
+From within the base directory, run:
+```
+./src/run.sh
+```

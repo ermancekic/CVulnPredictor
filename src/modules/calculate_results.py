@@ -84,7 +84,6 @@ def check_if_function_in_vulns():
     single_metrics_dir = os.path.join(os.getcwd(), "data", "single-metrics")
     vulns_dir = os.path.join(os.getcwd(), "data", "vulns")
     output_dir = os.path.join(os.getcwd(), "data", "found-methods")
-    os.makedirs(output_dir, exist_ok=True)
 
     # Iterate through single-metric directory
     for metric_name in os.listdir(single_metrics_dir):
@@ -169,7 +168,6 @@ def check_if_function_in_vulns():
             ]
 
             missing_output_path = os.path.join(os.getcwd(), "data", "not-found-methods")
-            os.makedirs(missing_output_path, exist_ok=True)
 
             if missing_vulns:
                 missing_output_path = os.path.join(
@@ -201,7 +199,6 @@ def calculate_infos():
     vulns_dir = os.path.join(base_dir, "data", "vulns")
     found_dir = os.path.join(base_dir, "data", "found-methods")
     output_dir = os.path.join(base_dir, "data", "general")
-    os.makedirs(output_dir, exist_ok=True)
 
     # Load all vulnerabilities by project
     project_vulns = {}
