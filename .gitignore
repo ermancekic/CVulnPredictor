@@ -16,6 +16,7 @@ data/not-found-methods/
 data/vulns/
 data/general/
 data/includes/
+data/missing_commits
 repositories/
 ARVO/
 arvo.db
@@ -27,3 +28,6 @@ LLVM-20.1.8-Linux-X64/
 LLVM-20.1.8-Linux-X64.tar.xz
 llvm-project-llvmorg-20.1.8/
 logs/
+projects_2023-11-14.json
+testcases.tar.gz
+testcases/

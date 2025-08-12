@@ -27,7 +27,7 @@ logging.info(f"libclang_path:  {libclang_path}")
 cindex.Config.set_library_file(libclang_path)
 cindex.Config.set_compatibility_check(False)
 
-cindex.Config.set_library_path(libclang_path)
+cindex.Config.set_library_path(os.path.dirname(libclang_path))
 logging.info(cindex.__file__)
 
 # Initialize Clang index
@@ -114,7 +114,12 @@ def parse_file(source_file, project_name):
     """
     try:
         # Determine language args
-        args = ['-std=c++17', '-x', 'c++'] if source_file.lower().endswith(('.cpp', '.cc', '.cxx', '.hpp', '.h')) else ['-std=c11', '-x', 'c']
+        libcxx = os.path.join(libclang_path, "..", "..", "include", "c++", "v1")
+        args = ['-std=c++17', '-x', 'c++', "-isystem", libcxx] if source_file.lower().endswith(('.cpp', '.cc', '.cxx', '.hpp')) else ['-std=c11', '-x', 'c']
+
+        clang_includes = os.path.join(libclang_path, "..", "clang", "20")
+        args.extend(["-resource-dir", clang_includes])
+
         # Scan source for includes
         include_pattern = re.compile(r'#\s*include\s*[<\"]([^\">]+)[\">]')
         include_names = set()
@@ -127,33 +132,47 @@ def parse_file(source_file, project_name):
                         include_names.add(m.group(1))
         except Exception as e:
             logging.info(f"Error reading includes from {source_file}: {e}")
+
         # Load project-specific include paths and match headers
-        includes_file = os.path.join(os.getcwd(), 'data', 'includes', f"{project_name}.json")
-        missing = []
-        if os.path.exists(includes_file):
+        includes_dir = os.path.join(os.getcwd(), 'data', 'includes')
+        project_file = os.path.join(includes_dir, f"{project_name}.json")
+        headers = []
+
+        # Load project-specific includes
+        if os.path.exists(project_file):
             try:
-                with open(includes_file, 'r', encoding='utf-8') as inc_f:
-                    headers = json.load(inc_f)
-                matched_dirs = set()
-                for inc_name in include_names:
-                    matches = [h for h in headers if os.path.basename(h) == inc_name]
-                    if matches:
-                        for h in matches:
-                            matched_dirs.add(os.path.dirname(h))
-                    else:
-                        missing.append(inc_name)
-                # Add include directories for matched headers
-                for inc_dir in matched_dirs:
-                    args.extend(['-I', inc_dir])
-                # Log missing includes
-                if missing:
-                    missing_dir = os.path.join(os.getcwd(), 'logs', 'missing_includes', project_name)
-                    os.makedirs(missing_dir, exist_ok=True)
-                    missing_file = os.path.join(missing_dir, f"{os.path.basename(source_file)}.json")
-                    with open(missing_file, 'w', encoding='utf-8') as mf:
-                        json.dump(missing, mf, indent=2)
+                with open(project_file, 'r', encoding='utf-8') as inc_f:
+                    headers.extend(json.load(inc_f))
             except Exception as e:
                 logging.info(f"Fehler beim Laden der Include-Pfade für {project_name}: {e}")
+
+        # Match include names against headers
+        missing = []
+        matched_dirs = set()
+        for inc_name in include_names:
+            
+            if "/" in inc_name:
+                inc_name = inc_name.split("/")[-1]
+
+            matches = [h for h in headers if os.path.basename(h) == inc_name]
+            if matches:
+                for h in matches:
+                    matched_dirs.add(os.path.dirname(h))
+            else:
+                missing.append(inc_name)
+
+        # Add include directories for matched headers
+        for inc_dir in matched_dirs:
+            args.extend(['-I', inc_dir])
+
+        # Log missing includes if any
+        if missing:
+            missing_dir = os.path.join(os.getcwd(), 'logs', 'missing_includes', project_name)
+            os.makedirs(missing_dir, exist_ok=True)
+            missing_file = os.path.join(missing_dir, f"{os.path.basename(source_file)}.json")
+            with open(missing_file, 'w', encoding='utf-8') as mf:
+                json.dump(missing, mf, indent=2)
+                
         # Parse translation unit with matched include paths
         tu = index.parse(source_file, args)
     except Exception as e:

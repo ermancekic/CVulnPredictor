@@ -10,7 +10,6 @@ import os
 import ujson as json
 import re
 import yaml
-import requests
 
 def get_project_tuples_with_vulns():
     """

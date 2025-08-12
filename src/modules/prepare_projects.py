@@ -390,6 +390,9 @@ def delete_unfixable_broken_commits():
             logging.info(f"Fehler beim Verarbeiten von {path}: {e}")
 
 def get_project_includes():
+    """
+    Extracts include files from all OSS projects and saves them in data/includes.
+    """
     logging.info("Erzeuge Include-Listen für OSS-Projects...")
     cwd = os.getcwd()
     includes_path = os.path.join(cwd, "data", "includes")
@@ -419,3 +422,27 @@ def get_project_includes():
             logging.info(f"Includes für Projekt {entry} in {output_file} geschrieben.")
         except Exception as e:
             logging.info(f"Fehler beim Schreiben der Include-Datei für {entry}: {e}")
+
+def get_general_includes():
+    """
+    Extracts general include files from clang installation and saves them in data/includes/general.json.
+    """
+    logging.info("Erzeuge allgemeine Include-Liste für LLVM Clang...")
+    cwd = os.getcwd()
+    includes_path = os.path.join(cwd, "data", "includes")
+    os.makedirs(includes_path, exist_ok=True)
+    # Pfad zum Clang Include-Verzeichnis
+    clang_include_dir = os.path.join(cwd, "LLVM-20.1.8-Linux-X64", "lib", "clang", "20", "include")
+    general_includes = []
+    for root, dirs, files in os.walk(clang_include_dir):
+        for file in files:
+            if file.endswith('.h'):
+                abs_path = os.path.abspath(os.path.join(root, file))
+                general_includes.append(abs_path)
+    output_file = os.path.join(includes_path, "general.json")
+    try:
+        with open(output_file, 'w', encoding='utf-8') as out_f:
+            json.dump(general_includes, out_f, indent=2, ensure_ascii=False)
+        logging.info(f"Allgemeine Includes in {output_file} geschrieben.")
+    except Exception as e:
+        logging.info(f"Fehler beim Schreiben der allgemeinen Include-Datei: {e}")
