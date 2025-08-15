@@ -14,13 +14,14 @@ import logging
 import traceback
 import re
 import shutil
+import hashlib
 
 clang_path   = os.path.abspath(os.path.join(os.getcwd(), "llvm-project-llvmorg-20.1.8", "clang", "bindings", "python"))
 logging.info(f"clang_path: {clang_path}")
 sys.path.insert(0, clang_path)
 
 from clang import cindex
-from clang.cindex import TokenKind, CursorKind, TypeKind
+from clang.cindex import TokenKind, CursorKind, TypeKind, TranslationUnit
 
 libclang_path =  os.path.abspath(os.path.join(os.getcwd(), "LLVM-20.1.8-Linux-X64", "lib", "libclang.so"))
 logging.info(f"libclang_path:  {libclang_path}")
@@ -32,6 +33,7 @@ logging.info(cindex.__file__)
 
 # Initialize Clang index
 index = cindex.Index.create()
+DATA_ROOT = os.path.join(os.getcwd(), "data")
 
 def get_method_name(cursor):
     """
@@ -79,106 +81,207 @@ def print_json(solution, source_path):
         json_str = json_str.replace('\\/', '/')
         f.write(json_str)
     
-def get_source_files(source_path):
+def get_source_files(source_path, *, skip_dirs=None):
     """
     Recursively collect all C/C++ source file paths under the given directory.
-
-    Args:
-        source_path (str): Path to a directory or file to search for source files.
-
-    Returns:
-        list[str]: List of absolute paths to source files with extensions .c, .cpp, .h, etc.
+    Skips broken symlinks and common test/third_party dirs by default.
     """
     source_path = os.path.abspath(source_path)
-
     source_files = []
+
+    # Standardmäßig noisy/verursachende Ordner ausschließen
+    default_skips = {
+        'internal', 'third_party', 'thirdparty', 'tests', 'test',
+        'googletest', 'gtest', 'benchmark', 'benchmarks', 'examples', 'tools'
+    }
+    skip_dirs = set(skip_dirs or []) | default_skips
+
     if os.path.isdir(source_path):
-        for root, dirs, files in os.walk(source_path):
-            if 'internal' in dirs:
-                dirs.remove('internal')
+        for root, dirs, files in os.walk(source_path, followlinks=False):
+            # Verzeichnisse filtern (in-place, wirkt auf os.walk)
+            dirs[:] = [d for d in dirs if d not in skip_dirs]
+
             for f in files:
-                if f.endswith((".c", ".cc", ".cpp", ".cxx", ".h", ".hpp")):
-                    source_files.append(os.path.join(root, f))
+                if not f.endswith((".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hh", ".hxx")):
+                    continue
+                path = os.path.join(root, f)
+
+                # Nur reguläre existierende Dateien behalten
+                if not os.path.exists(path):
+                    continue
+                if os.path.islink(path) and not os.path.exists(os.path.realpath(path)):
+                    # Kaputter Symlink
+                    continue
+                if not os.path.isfile(path):
+                    continue
+
+                source_files.append(path)
 
     return source_files
 
+def _data_path(*parts):
+    return os.path.join(DATA_ROOT, *parts)
+
+def _slug(s: str) -> str:
+    return re.sub(r'[^0-9A-Za-z_]+', '_', s)
+
+def _short_hash(s: str) -> str:
+    return hashlib.sha1(s.encode("utf-8")).hexdigest()[:8]
+
+def _safe_rel(rel_path: str) -> str:
+    # normalisieren + Windows-Slashes vereinheitlichen
+    p = os.path.normpath(rel_path).replace("\\", "/").lstrip("/")
+    # Directory-Traversal abfangen
+    if p.startswith("..") or p == "":
+        p = _slug(rel_path)
+    return p
+
+def _safe_join_under(root: str, rel: str) -> str:
+    rel = _safe_rel(rel)
+    candidate = os.path.join(root, rel)
+    root_real = os.path.realpath(root)
+    cand_real = os.path.realpath(candidate)
+    if os.path.commonpath([cand_real, root_real]) != root_real:
+        # Fallback: flache Datei
+        candidate = os.path.join(root, _slug(rel))
+    return candidate
+
+def create_stub_unsaved_files(missing_includes, project_name):
+    """
+    In-memory Stubs für fehlende Includes: (stub_root, unsaved_files)
+    Pfade bleiben unter data/.
+    """
+    stub_root = _data_path('stubs', project_name)
+    unsaved_files = []
+
+    os.makedirs(stub_root, exist_ok=True)
+
+    for inc in missing_includes:
+        # Nur „projektartige“ Includes stubben: irgendwas mit '.' oder '/' (keine <vector>)
+        if not any(ch in inc for ch in ('/', '\\', '.')):
+            continue
+
+        rel_path = _safe_rel(inc)
+        stub_path = _safe_join_under(stub_root, rel_path)
+        os.makedirs(os.path.dirname(stub_path), exist_ok=True)
+
+        content = (
+            f"// auto-generated stub for {inc}\n"
+            "#pragma once\n"
+            f"struct __clang_stub_{_slug(inc)} {{}};\n"
+        )
+        # Keine Datei anlegen, nur unsaved buffer
+        unsaved_files.append((stub_path, content))
+
+    return stub_root, (unsaved_files if unsaved_files else None)
+
+def _looks_like_cxx_header(text_sample: str) -> bool:
+    # simple Heuristik: reicht für >90% der Fälle
+    needles = ('template<', 'namespace ', 'class ', 'std::', 'using ', '#include <vector>',
+               '#include <string>', '#include <array>', '#include <cstdint>')
+    t = text_sample
+    return any(n in t for n in needles)
+
 def parse_file(source_file, project_name):
-    """
-    Parse a C/C++ source file into a Clang TranslationUnit.
-
-    Args:
-        source_file (str): Absolute path to the source file to parse.
-
-    Returns:
-        cindex.TranslationUnit | None: The parsed translation unit, or None on failure.
-    """
     try:
-        # Determine language args
+        # Existenz/Regulärcheck (schützt gegen deine ENOENT-Logs)
+        if not (os.path.exists(source_file) and os.path.isfile(source_file)):
+            logging.info(f"Skip non-regular or missing file: {source_file}")
+            return None
+
+        # Sprachwahl
+        ext = os.path.splitext(source_file)[1].lower()
+        is_cxx = ext in ('.cpp', '.cc', '.cxx', '.hpp', '.hh', '.hxx')
+
+        # Heuristik für .h: kurzer Read
+        if ext == '.h':
+            try:
+                with open(source_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    sample = f.read(4000)
+                if _looks_like_cxx_header(sample):
+                    is_cxx = True
+            except Exception:
+                pass
+
         libcxx = os.path.join(libclang_path, "..", "..", "include", "c++", "v1")
-        args = ['-std=c++17', '-x', 'c++', "-isystem", libcxx] if source_file.lower().endswith(('.cpp', '.cc', '.cxx', '.hpp')) else ['-std=c11', '-x', 'c']
+        args = ['-std=c++17', '-x', 'c++', "-isystem", libcxx] if is_cxx else ['-std=c11', '-x', 'c']
 
         clang_includes = os.path.join(libclang_path, "..", "clang", "20")
         args.extend(["-resource-dir", clang_includes])
 
-        # Scan source for includes
-        include_pattern = re.compile(r'#\s*include\s*[<\"]([^\">]+)[\">]')
+        # Includes im File scannen
+        include_pattern = re.compile(r'#\s*include\s*([<"])([^">]+)[">]')
         include_names = set()
         try:
-            # Open source with error-ignore to handle non-UTF8 bytes
             with open(source_file, 'r', encoding='utf-8', errors='ignore') as src_f:
                 for line in src_f:
                     m = include_pattern.search(line)
                     if m:
-                        include_names.add(m.group(1))
+                        inc = m.group(2)
+                        include_names.add(inc)
         except Exception as e:
             logging.info(f"Error reading includes from {source_file}: {e}")
 
-        # Load project-specific include paths and match headers
-        includes_dir = os.path.join(os.getcwd(), 'data', 'includes')
-        project_file = os.path.join(includes_dir, f"{project_name}.json")
+        # Projekt + allgemeine Includes laden (beide unter data/includes)
+        includes_dir = _data_path('includes')
         headers = []
+        proj_file = os.path.join(includes_dir, f"{project_name}.json")
+        gen_file  = os.path.join(includes_dir, "general.json")
+        for cfg in (proj_file, gen_file):
+            if os.path.exists(cfg):
+                try:
+                    with open(cfg, 'r', encoding='utf-8') as f:
+                        headers.extend(json.load(f))
+                except Exception as e:
+                    logging.info(f"Fehler beim Laden von Include-Pfaden {cfg}: {e}")
 
-        # Load project-specific includes
-        if os.path.exists(project_file):
-            try:
-                with open(project_file, 'r', encoding='utf-8') as inc_f:
-                    headers.extend(json.load(inc_f))
-            except Exception as e:
-                logging.info(f"Fehler beim Laden der Include-Pfade für {project_name}: {e}")
-
-        # Match include names against headers
+        # Basename-Matching der echten Header
         missing = []
         matched_dirs = set()
         for inc_name in include_names:
-            
-            if "/" in inc_name:
-                inc_name = inc_name.split("/")[-1]
-
-            matches = [h for h in headers if os.path.basename(h) == inc_name]
+            base = os.path.basename(inc_name)
+            matches = [h for h in headers if os.path.basename(h) == base]
             if matches:
                 for h in matches:
                     matched_dirs.add(os.path.dirname(h))
             else:
                 missing.append(inc_name)
 
-        # Add include directories for matched headers
         for inc_dir in matched_dirs:
             args.extend(['-I', inc_dir])
 
-        # Log missing includes if any
+        # Stubs + Logging unter data/
+        unsaved_files = None
         if missing:
-            missing_dir = os.path.join(os.getcwd(), 'logs', 'missing_includes', project_name)
-            os.makedirs(missing_dir, exist_ok=True)
-            missing_file = os.path.join(missing_dir, f"{os.path.basename(source_file)}.json")
-            with open(missing_file, 'w', encoding='utf-8') as mf:
-                json.dump(missing, mf, indent=2)
-                
-        # Parse translation unit with matched include paths
-        tu = index.parse(source_file, args)
+            miss_dir = _data_path('logs', 'missing_includes', project_name)
+            os.makedirs(miss_dir, exist_ok=True)
+            base = os.path.basename(source_file)
+            stem, _ = os.path.splitext(base)
+            miss_file = os.path.join(miss_dir, f"{stem}-{_short_hash(os.path.abspath(source_file))}.json")
+            with open(miss_file, 'w', encoding='utf-8') as mf:
+                json.dump(missing, mf, indent=2, ensure_ascii=False)
+
+            stub_root, unsaved_files = create_stub_unsaved_files(missing, project_name)
+            if unsaved_files:
+                args.extend(['-I', stub_root])
+
+        # robuste Defaults
+        args.extend([
+            '-ferror-limit=0',
+            '-Wno-unknown-attributes',
+            '-Wno-pragma-once-outside-header',
+        ])
+
+        tu = index.parse(
+            source_file,
+            args=args,
+            unsaved_files=unsaved_files,
+            options=TranslationUnit.PARSE_INCOMPLETE
+        )
     except Exception as e:
         logging.getLogger("metrics_error_logger").error(f"Failed to parse {source_file}: {e}")
         return None
-        
+
     return tu
 
 def calculate_loc(cursor):

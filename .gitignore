@@ -17,6 +17,7 @@ data/vulns/
 data/general/
 data/includes/
 data/missing_commits
+data/stubs/
 repositories/
 ARVO/
 arvo.db
