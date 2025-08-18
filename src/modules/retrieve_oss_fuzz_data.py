@@ -5,11 +5,19 @@ This module extracts OSS project tuples with vulnerabilities from general metada
 updates obsolete URLs, and converts OSS-Vulns YAML files into JSON format
 for further analysis.
 """
-
+import re
+import time
+import html
 import os
 import ujson as json
 import re
 import yaml
+import requests
+from pathlib import Path
+from urllib.parse import urljoin
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 def get_project_tuples_with_vulns():
     """
@@ -46,12 +54,13 @@ def get_project_tuples_with_vulns():
     
     return result
 
-def get_oss_vulns_data_as_json(tuples_with_vulns):
+def get_oss_vulns_data_as_json(tuples_with_vulns, skip_existing=True):
     """
     Convert OSS-Fuzz vulnerability YAML data to JSON files in data/vulns.
 
     Args:
         tuples_with_vulns (list[tuple[str, str]]): List of (project_name, project_url) pairs to process.
+        skip_existing (bool): If True, skip processing when a JSON file already exists. Default is True.
 
     Returns:
         None
@@ -59,9 +68,6 @@ def get_oss_vulns_data_as_json(tuples_with_vulns):
     cwd = os.getcwd()
     path_to_vulns = os.path.join(cwd, "repositories", "OSS-Vulns", "vulns")
     destination_dir = os.path.join(cwd, "data", "vulns")
-    
-    # Ensure the destination directory exists
-    os.makedirs(destination_dir, exist_ok=True)
 
     CRASH_RE = re.compile(r'Crash state:\s*\n([^\n]+)')
 
@@ -74,7 +80,11 @@ def get_oss_vulns_data_as_json(tuples_with_vulns):
         project_path = os.path.join(path_to_vulns, project)
         if not os.path.isdir(project_path):
             continue
-    
+
+        destination_path = os.path.join(destination_dir, f"{project}.json")
+        if skip_existing and os.path.exists(destination_path):
+            continue  # Skip if destination file already exists and skip_existing is True
+
         reports_for_project = []
 
         for root, _, files in os.walk(project_path):
@@ -109,12 +119,11 @@ def get_oss_vulns_data_as_json(tuples_with_vulns):
                     full = m.group(1).strip()
                     parts = full.split("::")
                     if len(parts) >= 2:
-                        class_name  = "::".join(parts[:-1])
                         method_name = parts[-1]
                     else:
-                        class_name, method_name = None, parts[0]
+                        method_name = parts[0]
                 else:
-                    class_name = method_name = None
+                    method_name = None
 
                 # Extract OSS-Fuzz report ID from references
                 oss_id = None
@@ -129,13 +138,11 @@ def get_oss_vulns_data_as_json(tuples_with_vulns):
                 reports_for_project.append({
                     "id": data.get("id"),
                     "oss-id": oss_id,
-                    "class": class_name,
                     "method": method_name,
                     "summary": summary,
                     "introduced_commit": introduced_commit
                 })
     
-        destination_path = os.path.join(destination_dir, f"{project}.json")
         with open(destination_path, "w", encoding="utf-8") as out:
             json.dump(reports_for_project, out, indent=2, ensure_ascii=False)
             
@@ -172,3 +179,157 @@ def update_missing_commits_in_vulns():
         # Write updated reports back to data/vulns
         with open(vuln_file, "w", encoding="utf-8") as f:
             json.dump(reports, f, indent=2, ensure_ascii=False)
+
+def remove_vulns_that_are_not_in_arvo():
+    """
+    Remove vulnerabilities that are not present in ARVO meta data,
+    based on the presence of oss-id.
+    """
+    cwd = os.getcwd()
+    vulns_dir = os.path.join(cwd, "data", "vulns")
+    meta_dir = os.path.join(cwd, "repositories", "ARVO-Meta", "archive_data", "meta")
+    # Collect available oss-ids from ARVO meta files
+    available_ids = {fname[:-5] for fname in os.listdir(meta_dir) if fname.endswith(".json")}
+    for fname in os.listdir(vulns_dir):
+        if not fname.endswith(".json"):
+            continue
+        vuln_file = os.path.join(vulns_dir, fname)
+        with open(vuln_file, "r", encoding="utf-8") as f:
+            entries = json.load(f)
+        # Filter entries whose oss-id exists in available_ids
+        filtered = [e for e in entries if e.get("oss-id") in available_ids]
+        if filtered:
+            with open(vuln_file, "w", encoding="utf-8") as f:
+                json.dump(filtered, f, indent=2, ensure_ascii=False)
+        else:
+            os.remove(vuln_file)
+
+def get_new_oss_vuln_ids(max_workers: int | None = None):
+    """
+    Aktualisiert 'new-oss-id' parallel über alle JSON-Dateien in data/vulns.
+    Standardmäßig wird die Anzahl Threads auf os.cpu_count() gesetzt.
+
+    Args:
+        max_workers: Anzahl paralleler Threads (default: os.cpu_count()).
+    """
+    # robuste Muster (vorab kompilieren und an Worker übergeben)
+    js_url_patterns = [
+        re.compile(r'const\s+url\s*=\s*["\'](?P<url>https?://[^"\']+)["\']', re.I),
+        re.compile(r'location\.(?:href|replace)\s*=\s*["\'](?P<url>https?://[^"\']+)["\']', re.I),
+    ]
+    meta_refresh_re = re.compile(
+        r'<meta[^>]+http-equiv=["\']refresh["\'][^>]*content=["\'][^;]+;\s*url=(?P<url>[^"\'>\s]+)',
+        re.I
+    )
+    canonical_re = re.compile(
+        r'<link[^>]+rel=["\']canonical["\'][^>]*href=["\'](?P<url>https?://[^"\']+)["\']',
+        re.I
+    )
+    id_re = re.compile(r'(?:[?&]id=|/issues/)(\d+)')
+
+    base = Path("data") / "vulns"
+    if not base.exists():
+        print(f"Verzeichnis nicht gefunden: {base}")
+        return
+
+    paths = list(base.glob("*.json"))
+    if not paths:
+        print("Keine JSON-Dateien in data/vulns gefunden.")
+        return
+
+    workers = max_workers if isinstance(max_workers, int) and max_workers > 0 else (os.cpu_count() or 4)
+    
+    def process_file(path: Path) -> tuple[Path, int]:
+        """Verarbeitet eine einzelne Projekt-JSON-Datei und gibt (path, anzahl_updates) zurück."""
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                reports = json.load(f)
+        except Exception as e:
+            print(f"Konnte {path} nicht laden: {e}")
+            return (path, 0)
+
+        if not isinstance(reports, list):
+            return (path, 0)
+
+        # Eigene Session pro Thread
+        session = requests.Session()
+        retries = Retry(
+            total=3, backoff_factor=0.5,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset(["GET", "HEAD"])
+        )
+        session.mount("https://", HTTPAdapter(max_retries=retries))
+        session.headers.update({"User-Agent": "oss-fuzz-id-sync/1.0 (+requests)"})
+
+        updated = 0
+
+        for rep in reports:
+            oss_id = rep.get("oss-id")
+            # Skip if no oss_id or if new-oss-id key already exists
+            if not oss_id or 'new-oss-id' in rep:
+                continue
+
+            report_url = f"https://bugs.chromium.org/p/oss-fuzz/issues/detail?id={oss_id}"
+            try:
+                r = session.get(report_url, timeout=15)
+                r.raise_for_status()
+                final_url = r.url
+                html_text = r.text
+
+                # mögliche JS-/META-/canonical-Weiterleitung erkennen
+                redirect_url = None
+                for pat in js_url_patterns:
+                    m = pat.search(html_text)
+                    if m:
+                        redirect_url = html.unescape(m.group("url"))
+                        break
+                if not redirect_url:
+                    m = meta_refresh_re.search(html_text)
+                    if m:
+                        redirect_url = html.unescape(m.group("url"))
+                if not redirect_url:
+                    m = canonical_re.search(html_text)
+                    if m:
+                        redirect_url = html.unescape(m.group("url"))
+
+                if redirect_url:
+                    r2 = session.get(urljoin(final_url, redirect_url), timeout=15)
+                    r2.raise_for_status()
+                    final_url = r2.url
+                    html_text = r2.text  # aktualisieren
+
+                # Issue-ID aus finaler URL, ggf. Fallback: HTML
+                m = id_re.search(final_url) or id_re.search(html_text)
+                if m:
+                    rep["new-oss-id"] = m.group(1)
+                    updated += 1
+                else:
+                    print(f"Konnte keine Issue-ID extrahieren für oss-id {oss_id} (URL: {final_url})")
+
+                # kleine Pause gegen Rate Limits
+                time.sleep(0.1)
+
+            except Exception as e:
+                print(f"Error fetching new OSS-Fuzz id for {oss_id}: {e}")
+
+        if updated:
+            try:
+                with path.open("w", encoding="utf-8") as out:
+                    json.dump(reports, out, indent=2, ensure_ascii=False)
+            except Exception as e:
+                print(f"Konnte {path} nicht schreiben: {e}")
+
+        return (path, updated)
+
+    # Parallel über die Dateien
+    total_updates = 0
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = {ex.submit(process_file, p): p for p in paths}
+        for fut in as_completed(futures):
+            try:
+                _, upd = fut.result()
+                total_updates += upd
+            except Exception as e:
+                print(f"Fehler beim Verarbeiten von {futures[fut]}: {e}")
+
+    print(f"Fertig. Aktualisierte Einträge: {total_updates}")

@@ -42,26 +42,27 @@ logger.addHandler(metrics_err_handler)
 import modules.calculate_metrics
 import modules.retrieve_oss_fuzz_data
 import modules.calculate_results
+import modules.get_stacktraces
 
 
 # Thresholds for filtering metrics
 thresholds = {
-    "lines of code": -1,
-    "cyclomatic complexity": -1,
-    "number of loops": -1,
-    "number of nested loops": -1,
-    "max nesting loop depth": -1,
+    # "lines of code": -1,
+    # "cyclomatic complexity": -1,
+    # "number of loops": -1,
+    # "number of nested loops": -1,
+    # "max nesting loop depth": -1,
     "number of parameter variables": -1,
-    "number of callee parameter variables": -1,
-    "number of pointer arithmetic": -1,
-    "number of variables involved in pointer arithmetic": -1,
-    "max pointer arithmetic variable is involved in": -1,
-    "number of nested control structures": -1,
-    "maximum nesting level of control structures": -1,
-    "maximum of control dependent control structures": -1,
-    "maximum of data dependent control structures": -1,
-    "number of if structures without else": -1,
-    "number of variables involved in control predicates": -1
+    # "number of callee parameter variables": -1,
+    # "number of pointer arithmetic": -1,
+    # "number of variables involved in pointer arithmetic": -1,
+    # "max pointer arithmetic variable is involved in": -1,
+    # "number of nested control structures": -1,
+    # "maximum nesting level of control structures": -1,
+    # "maximum of control dependent control structures": -1,
+    # "maximum of data dependent control structures": -1,
+    # "number of if structures without else": -1,
+    # "number of variables involved in control predicates": -1
 }
 
 
@@ -137,7 +138,6 @@ def calculate_metrics(project_path):
 
         return project_dir, False
 
-
 def main():
     """
     Main entry point for the metrics pipeline.
@@ -151,8 +151,8 @@ def main():
 
     # Clone OSS-Fuzz repository definitions
     modules.prepare_projects.get_oss_repo()
+    modules.prepare_projects.get_arvo_meta()
     work_path = os.getcwd()
-    repos_path = os.path.join(work_path, "repositories")
 
     # # Collect projects
     all_projects = modules.prepare_projects.filter_oss_projects()
@@ -162,13 +162,18 @@ def main():
     modules.prepare_projects.get_oss_fuzz_vulns()
     vulnerable = modules.retrieve_oss_fuzz_data.get_project_tuples_with_vulns()
     print_json(vulnerable, os.path.join(work_path, "data/general/vulnerable_oss_projects.json"))
-    modules.retrieve_oss_fuzz_data.get_oss_vulns_data_as_json(vulnerable)
+    modules.retrieve_oss_fuzz_data.get_oss_vulns_data_as_json(vulnerable, True)
     modules.retrieve_oss_fuzz_data.update_missing_commits_in_vulns()
     modules.prepare_projects.delete_unfixable_broken_commits()
+    modules.retrieve_oss_fuzz_data.remove_vulns_that_are_not_in_arvo()
+    modules.retrieve_oss_fuzz_data.get_new_oss_vuln_ids(64)
+    # modules.get_stacktraces.get_stacktraces(False)
+    # modules.get_stacktraces.extract_vuln_location()
 
     # Extract commits
     vulns_with_commits = modules.prepare_projects.get_vulnerable_projects_with_commits(vulnerable)
     logging.info(f"Found {len(vulns_with_commits)} vulnerable projects with commits.")
+
     # Only include projects that have at least one commit
     filtered_vulns_with_commits = [proj for proj in vulns_with_commits if len(proj) > 2 and proj[2:]]
     print_json(
@@ -180,7 +185,7 @@ def main():
 
     # Phase 1: Clone all projects in parallel
     clone_results = []
-    max_workers = multiprocessing.cpu_count() * 3
+    max_workers = multiprocessing.cpu_count() * 6
     logging.info(f"Using {max_workers} workers for cloning projects.")
     with concurrent.futures.ThreadPoolExecutor(max_workers) as pool:
         futures = [pool.submit(clone_project, proj) for proj in vulns_with_commits]
@@ -195,7 +200,10 @@ def main():
         projects.append(os.path.join(base_dir, entry))
     print("Anzahl geklonter Projekte: ", len(os.listdir(base_dir)))
 
+    # projects = projects[:100]  # Limit to first 100 projects for testing
+
     # Phase 2: Calculate metrics
+    max_workers = multiprocessing.cpu_count() * 3
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as pool:
         futures = [pool.submit(calculate_metrics, project_path) for project_path in projects]
         for future in concurrent.futures.as_completed(futures):

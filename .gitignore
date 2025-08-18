@@ -18,6 +18,7 @@ data/general/
 data/includes/
 data/missing_commits
 data/stubs/
+data/stacktraces
 repositories/
 ARVO/
 arvo.db
@@ -32,3 +33,5 @@ logs/
 projects_2023-11-14.json
 testcases.tar.gz
 testcases/
+
+ARVO-Meta/

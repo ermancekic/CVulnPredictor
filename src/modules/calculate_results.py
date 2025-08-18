@@ -11,7 +11,6 @@ import ujson as json
 import os
 import logging
 import shutil
-import os
 from pathlib import Path
 from collections import defaultdict
 
@@ -93,8 +92,11 @@ def check_if_function_in_vulns():
 
         # Iterate through each metric directory
         for entry in os.listdir(metric_dir):
-            project_name = entry.split('_')[0]
-            commit_hash = entry.split('_')[1].split('.')[0]
+            # project_name = entry.split('_')[0]
+            # commit_hash = entry.split('_')[1].split('.')[0]
+
+            basename, _ = os.path.splitext(entry)
+            project_name, commit_hash = basename.rsplit('_', 1)
 
             project_metric_path = os.path.join(metric_dir, entry)
             project_vulns_path = os.path.join(vulns_dir, project_name + ".json")

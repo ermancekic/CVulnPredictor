@@ -35,6 +35,7 @@ def prepare_directories():
         os.path.join(current_dir, "repositories", "OSS-Projects"),
         os.path.join(current_dir, "repositories", "OSS-Repo"),
         os.path.join(current_dir, "repositories", "OSS-Vulns"),
+        os.path.join(current_dir, "repositories", "ARVO-Meta"),
         os.path.join(current_dir, "data", "single-metrics"),
         os.path.join(current_dir, "data", "single-metrics", "lines of code"),
         os.path.join(current_dir, "data", "single-metrics", "cyclomatic complexity"),
@@ -75,14 +76,14 @@ def get_oss_repo():
     Returns:
         None
     """
-    
-    logging.info("Klonen des OSS-Fuzz Repositories...")
+
     oss_repo_path = os.path.join(os.getcwd(), "repositories", "OSS-Repo")
     
     if len(os.listdir(oss_repo_path)) > 0:
         logging.info("OSS-Fuzz Repository existiert bereits, überspringe Klonen...")
         return
     
+    logging.info("Klonen des OSS-Fuzz Repositories...")
     cmd = ["git", "clone", "https://github.com/google/oss-fuzz", oss_repo_path]
     subprocess.run(cmd, check=True)
        
@@ -96,13 +97,35 @@ def get_oss_fuzz_vulns():
     Returns:
         None
     """
-    
+
     oss_vulns_repo_path = os.path.join(os.getcwd(), "repositories", "OSS-Vulns")
     
     if len(os.listdir(oss_vulns_repo_path)) > 0:
         return
     
+    logging.info("Klonen des OSS-Fuzz-Vulns Repositories...")
     cmd = ["git", "clone", "https://github.com/google/oss-fuzz-vulns.git", oss_vulns_repo_path]
+    subprocess.run(cmd, check=True)
+
+def get_arvo_meta():
+    """
+    Clone the ARVO-Meta repository into the workspace root.
+
+    Args:
+        None
+
+    Returns:
+        None
+    """
+    
+    arvo_meta_path = os.path.join(os.getcwd(), "repositories","ARVO-Meta")
+    
+    if os.path.exists(arvo_meta_path) and os.listdir(arvo_meta_path):
+        logging.info("ARVO-Meta Repository existiert bereits, überspringe Klonen...")
+        return
+    
+    logging.info("Klonen des ARVO-Meta Repositories...")
+    cmd = ["git", "clone", "https://github.com/n132/ARVO-Meta.git", "--depth=1", arvo_meta_path]
     subprocess.run(cmd, check=True)
 
 def filter_oss_projects() -> list[(str, str)]:

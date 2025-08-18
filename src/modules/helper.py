@@ -52,9 +52,6 @@ def get_revision_url():
     cwd = os.getcwd()
     missing_dir = os.path.join(cwd, "data", "missing_commits")
 
-    # Pattern to capture the introduced commit after the colon in the 'range' parameter
-    RANGE_RE = re.compile(r'range(?:=|%3D|\\u003d)(?P<start>[0-9A-Za-z]+):(?P<intro>[0-9A-ZaZ]+)')
-
     for fname in os.listdir(missing_dir):
         if not fname.endswith(".json"):
             continue
