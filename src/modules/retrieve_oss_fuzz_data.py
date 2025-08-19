@@ -9,10 +9,12 @@ import re
 import time
 import html
 import os
+import sqlite3
 import ujson as json
 import re
 import yaml
 import requests
+import logging
 from pathlib import Path
 from urllib.parse import urljoin
 from requests.adapters import HTTPAdapter
@@ -51,15 +53,28 @@ def get_project_tuples_with_vulns():
             # Check if URL needs to be updated
             updated_url = url_mapping.get(url, url)  # Use updated URL if found, otherwise keep original
             result.append((name, updated_url))
-    
+
+    # Persist directly to JSON within this function
+    out_dir = os.path.join(os.getcwd(), "data", "general")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, "vulnerable_oss_projects.json")
+    try:
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(result, f, indent=2, ensure_ascii=False)
+        logging.info(f"{len(result)} entries written to {out_path}")
+    except Exception as e:
+        logging.info(f"Fehler beim Schreiben von {out_path}: {e}")
+
     return result
 
-def get_oss_vulns_data_as_json(tuples_with_vulns, skip_existing=True):
+def get_oss_vulns_data_as_json(skip_existing=True):
     """
     Convert OSS-Fuzz vulnerability YAML data to JSON files in data/vulns.
 
+    Behavior change: Reads the vulnerable project tuples directly from
+    data/general/vulnerable_oss_projects.json, so no parameter is required.
+
     Args:
-        tuples_with_vulns (list[tuple[str, str]]): List of (project_name, project_url) pairs to process.
         skip_existing (bool): If True, skip processing when a JSON file already exists. Default is True.
 
     Returns:
@@ -70,6 +85,18 @@ def get_oss_vulns_data_as_json(tuples_with_vulns, skip_existing=True):
     destination_dir = os.path.join(cwd, "data", "vulns")
 
     CRASH_RE = re.compile(r'Crash state:\s*\n([^\n]+)')
+
+    # Load vulnerable projects list from JSON
+    vulnerable_json = os.path.join(cwd, "data", "general", "vulnerable_oss_projects.json")
+    if not os.path.exists(vulnerable_json):
+        logging.info(f"Vulnerable projects JSON not found: {vulnerable_json}")
+        return
+    try:
+        with open(vulnerable_json, "r", encoding="utf-8") as f:
+            tuples_with_vulns = json.load(f)
+    except Exception as e:
+        logging.info(f"Failed to load {vulnerable_json}: {e}")
+        return
 
     project_names_with_vulns = [t[0] for t in tuples_with_vulns]
     for project in os.listdir(path_to_vulns):
@@ -145,7 +172,51 @@ def get_oss_vulns_data_as_json(tuples_with_vulns, skip_existing=True):
     
         with open(destination_path, "w", encoding="utf-8") as out:
             json.dump(reports_for_project, out, indent=2, ensure_ascii=False)
-            
+
+def delete_unfixable_broken_commits():
+    """
+    Remove vulnerabilities whose introduced_commit appears in the unfixable_broken_commits list.
+    Iterates over each JSON file in data/vulns, filters out entries matching unfixable commits,
+    and deletes the file if no entries remain.
+    """
+    cwd = os.getcwd()
+    vulns_dir = os.path.join(cwd, "data", "vulns")
+    ubc_path = os.path.join(cwd, "data", "dependencies", "unfixable_broken_commits.json")
+    # Load unfixable broken commits mapping: project_name -> set of commits
+    ubc_map = {}
+    if os.path.exists(ubc_path):
+        try:
+            with open(ubc_path, "r", encoding="utf-8") as f:
+                ubc_list = json.load(f)
+            for proj, commit in ubc_list:
+                ubc_map.setdefault(proj, set()).add(commit)
+        except Exception as e:
+            logging.info(f"Fehler beim Laden von unfixable_broken_commits: {e}")
+            return
+    else:
+        logging.info(f"Datei unfixable_broken_commits nicht gefunden: {ubc_path}")
+        return
+    # Process each vulnerability file
+    for fname in os.listdir(vulns_dir):
+        if not fname.endswith('.json'):
+            continue
+        proj = fname[:-5]
+        path = os.path.join(vulns_dir, fname)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                entries = json.load(f)
+            # Filter out unfixable entries
+            filtered = [e for e in entries if not (proj in ubc_map and e.get('introduced_commit') in ubc_map[proj])]
+            if filtered:
+                with open(path, "w", encoding="utf-8") as out:
+                    json.dump(filtered, out, indent=2, ensure_ascii=False)
+                logging.info(f"Aktualisiert: {path}, {len(entries)-len(filtered)} Einträge entfernt.")
+            else:
+                os.remove(path)
+                logging.info(f"Gelöscht leere Datei: {path}")
+        except Exception as e:
+            logging.info(f"Fehler beim Verarbeiten von {path}: {e}")
+
 def update_missing_commits_in_vulns():
     """
     Identify vulnerabilities without introduced commits,
@@ -180,7 +251,7 @@ def update_missing_commits_in_vulns():
         with open(vuln_file, "w", encoding="utf-8") as f:
             json.dump(reports, f, indent=2, ensure_ascii=False)
 
-def remove_vulns_that_are_not_in_arvo():
+def remove_vulns_that_are_not_in_arvo_repo():
     """
     Remove vulnerabilities that are not present in ARVO meta data,
     based on the presence of oss-id.
@@ -212,6 +283,8 @@ def get_new_oss_vuln_ids(max_workers: int | None = None):
     Args:
         max_workers: Anzahl paralleler Threads (default: os.cpu_count()).
     """
+    logging.info("Get new oss vuln ids...")
+
     # robuste Muster (vorab kompilieren und an Worker übergeben)
     js_url_patterns = [
         re.compile(r'const\s+url\s*=\s*["\'](?P<url>https?://[^"\']+)["\']', re.I),
@@ -333,3 +406,93 @@ def get_new_oss_vuln_ids(max_workers: int | None = None):
                 print(f"Fehler beim Verarbeiten von {futures[fut]}: {e}")
 
     print(f"Fertig. Aktualisierte Einträge: {total_updates}")
+
+def remove_vulns_that_are_not_in_arvo_table():
+    """
+    Entfernt Einträge aus den JSON-Dateien in `data/vulns`, deren `new-oss-id`
+    nicht in der `arvo.db` unter der Spalte `localId` vorkommt.
+
+    Verhalten:
+    - Lädt alle Werte der Spalte `localId` aus allen Tabellen der Datenbank (falls vorhanden).
+    - Für jede JSON-Datei in `data/vulns` werden nur die Einträge behalten, deren
+      `new-oss-id` in der Datenbank vorkommt.
+    - Falls nach dem Filtern keine Einträge mehr übrig bleiben, wird die JSON-Datei gelöscht.
+    """
+    cwd = os.getcwd()
+    db_path = os.path.join(cwd, "arvo.db")
+
+    if not os.path.exists(db_path):
+        print(f"arvo.db nicht gefunden: {db_path}")
+        return
+
+    available_ids = set()
+    try:
+        conn = sqlite3.connect(db_path)
+        cur = conn.cursor()
+        # Liste aller Tabellen holen
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = [r[0] for r in cur.fetchall()]
+
+        for tbl in tables:
+            try:
+                cur.execute(f"PRAGMA table_info('{tbl}')")
+                cols = [r[1] for r in cur.fetchall()]
+                if 'localId' in cols:
+                    # Alle nicht-null localId-Werte sammeln
+                    cur.execute(f"SELECT localId FROM '{tbl}' WHERE localId IS NOT NULL")
+                    for (lid,) in cur.fetchall():
+                        if lid is None:
+                            continue
+                        available_ids.add(str(lid))
+            except Exception as e:
+                # Fehler bei einer Tabelle dürfen den Gesamtlauf nicht abbrechen
+                print(f"Fehler beim Lesen der Tabelle {tbl}: {e}")
+
+    except Exception as e:
+        print(f"Fehler beim Öffnen von arvo.db: {e}")
+        return
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    vulns_dir = os.path.join(cwd, "data", "vulns")
+    if not os.path.isdir(vulns_dir):
+        print(f"Verzeichnis nicht gefunden: {vulns_dir}")
+        return
+
+    for fname in os.listdir(vulns_dir):
+        if not fname.endswith('.json'):
+            continue
+
+        vuln_file = os.path.join(vulns_dir, fname)
+        try:
+            with open(vuln_file, 'r', encoding='utf-8') as f:
+                entries = json.load(f)
+        except Exception as e:
+            print(f"Konnte {vuln_file} nicht laden: {e}")
+            continue
+
+        if not isinstance(entries, list):
+            print(f"Überspringe {vuln_file}: erwartet Liste, gefunden {type(entries)}")
+            continue
+
+        filtered = []
+        for e in entries:
+            new_id = e.get('new-oss-id')
+            # Wenn kein new-oss-id vorhanden oder nicht in DB -> löschen (nicht in filtered aufnehmen)
+            if new_id and str(new_id) in available_ids:
+                filtered.append(e)
+
+        if filtered:
+            try:
+                with open(vuln_file, 'w', encoding='utf-8') as out:
+                    json.dump(filtered, out, indent=2, ensure_ascii=False)
+            except Exception as e:
+                print(f"Konnte {vuln_file} nicht schreiben: {e}")
+        else:
+            try:
+                os.remove(vuln_file)
+            except Exception as e:
+                print(f"Konnte {vuln_file} nicht löschen: {e}")

@@ -130,7 +130,7 @@ def get_arvo_meta():
 
 def filter_oss_projects() -> list[(str, str)]:
     """
-    Return OSS-Fuzz project names and URLs for C/C++ projects.
+    Return OSS-Fuzz project names and URLs for C/C++ projects and persist them as JSON.
 
     Args:
         None
@@ -138,21 +138,35 @@ def filter_oss_projects() -> list[(str, str)]:
     Returns:
         list[tuple[str, str]]: List of (project_name, project_url) pairs.
     """
-    
+
     projects_root = os.path.join(os.getcwd(), "repositories", "OSS-Repo", "projects")
     filtered = []
 
     for entry in os.listdir(projects_root):
         project_yaml_path = os.path.join(projects_root, entry, "project.yaml")
-        
-        with open (project_yaml_path, "r", encoding="utf-8") as f:
+
+        with open(project_yaml_path, "r", encoding="utf-8") as f:
             project_yaml = yaml.safe_load(f)
-        
+
         if 'language' in project_yaml:
             lang = project_yaml['language']
-        
+        else:
+            # If language isn't defined, skip this entry
+            continue
+
         if lang in ('c', 'c++') and 'main_repo' in project_yaml:
             filtered.append((entry, project_yaml['main_repo']))
+
+    # Persist directly to JSON within this function
+    out_dir = os.path.join(os.getcwd(), "data", "general")
+    os.makedirs(out_dir, exist_ok=True)
+    out_path = os.path.join(out_dir, "all_oss_projects.json")
+    try:
+        with open(out_path, "w", encoding="utf-8") as f:
+            json.dump(filtered, f, indent=2, ensure_ascii=False)
+        logging.info(f"{len(filtered)} entries written to {out_path}")
+    except Exception as e:
+        logging.info(f"Fehler beim Schreiben von {out_path}: {e}")
 
     return filtered
 
@@ -233,19 +247,38 @@ def get_oss_projects(project_tuple):
             shutil.rmtree(commit_dir, ignore_errors=True)
             logging.info(f"Unvollständiger Ordner {commit_dir} wurde gelöscht.")
          
-def get_vulnerable_projects_with_commits(vulnerable_projects):
+def get_vulnerable_projects_with_commits():
     """
-    Extract vulnerability commits for each project and extend project tuples.
+    Extract vulnerability commits for each project by reading from
+    'data/general/vulnerable_oss_projects.json' and extend project tuples.
 
     Args:
-        vulnerable_projects (list[tuple[str, str]]): List of (project_name, project_url) tuples.
+        None
 
     Returns:
-        list[tuple]: Tuples (project_name, project_url, commit1, ... ) for vulnerable projects.
+        list[tuple]: Tuples (project_name, project_url, commit1, ... ) for vulnerable projects
+                      that have at least one commit. Also writes the same result to
+                      'data/general/vulns_projects_with_commits.json'.
     """
     vulnerable_projects_with_commits = []
     vulns_dir = os.path.join(os.getcwd(), "data", "vulns")
+    out_dir = os.path.join(os.getcwd(), "data", "general")
+    out_path = os.path.join(out_dir, "vulns_projects_with_commits.json")
     zero_commits_path = os.path.join(os.getcwd(), "data", "dependencies", "zero_commits.json")
+    vuln_projects_json = os.path.join(os.getcwd(), "data", "general", "vulnerable_oss_projects.json")
+
+    # Load vulnerable projects list directly from JSON
+    vulnerable_projects = []
+    if os.path.exists(vuln_projects_json):
+        try:
+            with open(vuln_projects_json, "r", encoding="utf-8") as vf:
+                # expected format: [ [projectName, projectUrl], ... ]
+                vulnerable_projects = [tuple(item) for item in json.load(vf)]
+        except Exception as e:
+            logging.info(f"Fehler beim Laden von vulnerable_oss_projects.json: {e}")
+            vulnerable_projects = []
+    else:
+        logging.info(f"Vulnerable OSS Projects JSON nicht gefunden: {vuln_projects_json}")
 
     # 1) Load zero_commits.json and convert to Dict
     zero_mapping = {}
@@ -262,7 +295,10 @@ def get_vulnerable_projects_with_commits(vulnerable_projects):
             logging.info(f"Fehler beim Laden von zero_commits.json: {e}")
 
     # 2) Collect commits for each vulnerable project
+    total_projects = 0
+    kept_projects = 0
     for project_name, project_url in vulnerable_projects:
+        total_projects += 1
         json_path = os.path.join(vulns_dir, f"{project_name}.json")
         commits = []
 
@@ -289,18 +325,28 @@ def get_vulnerable_projects_with_commits(vulnerable_projects):
                                 logging.info(f"Ersetze Commit '0' durch '{replacement}' für {project_name}")
                         else:
                             logging.info(f"Kein Ersatz-Commit für '0' gefunden in zero_commits.json für {project_url}")
-                # Tuple erzeugen (mit oder ohne Commits)
+                # Nur Projekte mit mind. einem Commit behalten
                 if commits:
+                    kept_projects += 1
                     vulnerable_projects_with_commits.append((project_name, project_url, *commits))
-                else:
-                    vulnerable_projects_with_commits.append((project_name, project_url))
             except Exception as e:
                 logging.info(f"Fehler beim Laden der Vulnerabilities für {project_name}: {e}")
-                vulnerable_projects_with_commits.append((project_name, project_url))
+                # keine Aufnahme, wenn Commits nicht gelesen werden konnten
         else:
             # keine JSON-Datei vorhanden
             logging.info(f"Vulnerabilities-Datei nicht gefunden: {json_path}")
-            vulnerable_projects_with_commits.append((project_name, project_url))
+            # keine Aufnahme, wenn keine Daten vorhanden sind
+
+    # Ergebnis als JSON persistieren (Liste von Listen statt Tuples)
+    try:
+        serializable = [list(t) for t in vulnerable_projects_with_commits]
+        with open(out_path, "w", encoding="utf-8") as out_f:
+            json.dump(serializable, out_f, indent=2, ensure_ascii=False)
+        logging.info(
+            f"{kept_projects}/{total_projects} Projekte mit Commits nach {out_path} geschrieben."
+        )
+    except Exception as e:
+        logging.info(f"Fehler beim Schreiben von {out_path}: {e}")
 
     return vulnerable_projects_with_commits
 
@@ -367,50 +413,6 @@ def get_clang_dependencies():
         "binary_dir": bin_target,
         "source_dir": src_target
     }
-
-def delete_unfixable_broken_commits():
-    """
-    Remove vulnerabilities whose introduced_commit appears in the unfixable_broken_commits list.
-    Iterates over each JSON file in data/vulns, filters out entries matching unfixable commits,
-    and deletes the file if no entries remain.
-    """
-    cwd = os.getcwd()
-    vulns_dir = os.path.join(cwd, "data", "vulns")
-    ubc_path = os.path.join(cwd, "data", "dependencies", "unfixable_broken_commits.json")
-    # Load unfixable broken commits mapping: project_name -> set of commits
-    ubc_map = {}
-    if os.path.exists(ubc_path):
-        try:
-            with open(ubc_path, "r", encoding="utf-8") as f:
-                ubc_list = json.load(f)
-            for proj, commit in ubc_list:
-                ubc_map.setdefault(proj, set()).add(commit)
-        except Exception as e:
-            logging.info(f"Fehler beim Laden von unfixable_broken_commits: {e}")
-            return
-    else:
-        logging.info(f"Datei unfixable_broken_commits nicht gefunden: {ubc_path}")
-        return
-    # Process each vulnerability file
-    for fname in os.listdir(vulns_dir):
-        if not fname.endswith('.json'):
-            continue
-        proj = fname[:-5]
-        path = os.path.join(vulns_dir, fname)
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                entries = json.load(f)
-            # Filter out unfixable entries
-            filtered = [e for e in entries if not (proj in ubc_map and e.get('introduced_commit') in ubc_map[proj])]
-            if filtered:
-                with open(path, "w", encoding="utf-8") as out:
-                    json.dump(filtered, out, indent=2, ensure_ascii=False)
-                logging.info(f"Aktualisiert: {path}, {len(entries)-len(filtered)} Einträge entfernt.")
-            else:
-                os.remove(path)
-                logging.info(f"Gelöscht leere Datei: {path}")
-        except Exception as e:
-            logging.info(f"Fehler beim Verarbeiten von {path}: {e}")
 
 def get_project_includes():
     """

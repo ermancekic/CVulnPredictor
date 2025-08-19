@@ -4,6 +4,7 @@ import subprocess
 import multiprocessing
 import re
 import logging
+import sqlite3
 
 # When True, existing stacktrace entries will be skipped
 SKIP_EXISTING = False
@@ -60,7 +61,7 @@ def _process_report(rep):
 			logging.warning(f"Failed to remove container {container_name}: {e}")
 	return rep
 
-def get_stacktraces(skip_existing=False):
+def get_stacktraces_from_docker(skip_existing=False):
 	"""
 	Iterate over each vulnerability entry in JSON files under data/vulns.
 	If skip_existing is True, existing 'stacktrace' entries will be skipped.
@@ -164,7 +165,6 @@ def extract_vuln_location():
     if not os.path.isdir(vulns_dir):
         raise FileNotFoundError(f"Vuln directory not found: {vulns_dir}")
 
-    # Wähle eine sinnvolle Kernanzahl (ähnlich wie bei dir, aber dynamisch)
     cpu_count = 20
 
     for fname in os.listdir(vulns_dir):
@@ -192,3 +192,109 @@ def extract_vuln_location():
             print(f"Wrote locations into {file_path}")
         except Exception as e:
             print(f"Failed to write {file_path}: {e}")
+
+def get_stacktraces_from_table():
+    """
+    Gehe über alle JSON-Dateien in data/vulns und für jeden Eintrag mit
+    'new-oss-id' suche in der lokalen SQLite-Datenbank 'arvo.db' nach einem
+    Eintrag mit 'localId' == new-oss-id. Falls gefunden, hole das Feld
+    'report' aus der DB und speichere es als 'stacktrace' im JSON-Eintrag.
+    Schreibe die JSON-Dateien mit den aktualisierten Einträgen zurück.
+    """
+    cwd = os.getcwd()
+    vulns_dir = os.path.join(cwd, "data", "vulns")
+    db_path = os.path.join(cwd, "arvo.db")
+
+    if not os.path.isdir(vulns_dir):
+        raise FileNotFoundError(f"Vuln directory not found: {vulns_dir}")
+    if not os.path.isfile(db_path):
+        raise FileNotFoundError(f"Database not found: {db_path}")
+
+    # Öffne DB einmal und finde Tabellen, die sowohl localId als auch report haben
+    conn = sqlite3.connect(db_path)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = [r[0] for r in cur.fetchall()]
+
+        tables_with_cols = []
+        for t in tables:
+            try:
+                cur.execute(f"PRAGMA table_info('{t}')")
+                cols = [r[1] for r in cur.fetchall()]
+                if 'localId' in cols and 'crash_output' in cols:
+                    tables_with_cols.append(t)
+            except Exception:
+                # ignore tables we can't introspect
+                continue
+
+        if not tables_with_cols:
+            logging.warning(f"No table with both 'localId' and 'crash_output' columns found in {db_path}")
+
+        # Für jede JSON-Datei: laden, updaten, speichern
+        for fname in os.listdir(vulns_dir):
+            if not fname.endswith('.json'):
+                continue
+            file_path = os.path.join(vulns_dir, fname)
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    reports = json.load(f)
+            except Exception as e:
+                logging.warning(f"Skipping {file_path}: failed to read JSON ({e})")
+                continue
+
+            if not isinstance(reports, list):
+                logging.warning(f"Skipping {file_path}: JSON is not a list")
+                continue
+
+            changed = False
+            for rep in reports:
+                try:
+                    new_id = rep.get('new-oss-id')
+                    if not new_id:
+                        # no id to lookup
+                        continue
+
+                    # If stacktrace already present, skip (keeps behavior consistent)
+                    if rep.get('stacktrace') is not None:
+                        continue
+
+                    found = False
+                    for t in tables_with_cols:
+                        try:
+                            # select crash_output column
+                            cur.execute(f'SELECT "crash_output" FROM "{t}" WHERE localId = ? LIMIT 1', (new_id,))
+                            row = cur.fetchone()
+                            if row is not None:
+                                # store the crash output (as-is). If it's bytes, decode to str
+                                crash_val = row[0]
+                                if isinstance(crash_val, bytes):
+                                    try:
+                                        crash_val = crash_val.decode('utf-8')
+                                    except Exception:
+                                        crash_val = repr(crash_val)
+                                rep['stacktrace'] = crash_val
+                                found = True
+                                break
+                        except Exception:
+                            # ignore per-table query errors and continue
+                            continue
+
+                    if not found:
+                        # mark explicitly if nothing found
+                        rep.setdefault('stacktrace', None)
+                        rep.setdefault('stacktrace_error', f"no db entry for localId={new_id}")
+                except Exception as e:
+                    rep['stacktrace'] = None
+                    rep['stacktrace_error'] = f"{type(e).__name__}: {e}"
+
+            # schreibe nur wenn verändert (oder wir wollen immer überschreiben)
+            try:
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    json.dump(reports, f, indent=2, ensure_ascii=False)
+            except Exception as e:
+                logging.error(f"Failed to write {file_path}: {e}")
+    finally:
+        conn.close()
+
+     

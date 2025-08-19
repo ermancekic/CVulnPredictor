@@ -149,41 +149,32 @@ def main():
         None
     """
 
-    # Clone OSS-Fuzz repository definitions
+    base_dir = os.path.join(os.getcwd(), "repositories", "OSS-Projects")
+
+    # Prepare project
     modules.prepare_projects.get_oss_repo()
     modules.prepare_projects.get_arvo_meta()
-    work_path = os.getcwd()
-
-    # # Collect projects
-    all_projects = modules.prepare_projects.filter_oss_projects()
-    print_json(all_projects, os.path.join(work_path, "data/general/all_oss_projects.json"))
+    modules.prepare_projects.filter_oss_projects()
+    modules.prepare_projects.get_oss_fuzz_vulns()
+    modules.prepare_projects.get_project_includes()
 
     # Retrieve vulnerable projects
-    modules.prepare_projects.get_oss_fuzz_vulns()
-    vulnerable = modules.retrieve_oss_fuzz_data.get_project_tuples_with_vulns()
-    print_json(vulnerable, os.path.join(work_path, "data/general/vulnerable_oss_projects.json"))
-    modules.retrieve_oss_fuzz_data.get_oss_vulns_data_as_json(vulnerable, True)
+    modules.retrieve_oss_fuzz_data.get_project_tuples_with_vulns()
+    modules.retrieve_oss_fuzz_data.get_oss_vulns_data_as_json()
     modules.retrieve_oss_fuzz_data.update_missing_commits_in_vulns()
-    modules.prepare_projects.delete_unfixable_broken_commits()
-    modules.retrieve_oss_fuzz_data.remove_vulns_that_are_not_in_arvo()
-    modules.retrieve_oss_fuzz_data.get_new_oss_vuln_ids(64)
-    # modules.get_stacktraces.get_stacktraces(False)
-    # modules.get_stacktraces.extract_vuln_location()
+    modules.retrieve_oss_fuzz_data.delete_unfixable_broken_commits()
+    modules.retrieve_oss_fuzz_data.get_new_oss_vuln_ids(128)
+    modules.retrieve_oss_fuzz_data.remove_vulns_that_are_not_in_arvo_table()
+
+    # Get stack traces
+    modules.get_stacktraces.get_stacktraces_from_table()
+    modules.get_stacktraces.extract_vuln_location()
 
     # Extract commits
-    vulns_with_commits = modules.prepare_projects.get_vulnerable_projects_with_commits(vulnerable)
+    vulns_with_commits = modules.prepare_projects.get_vulnerable_projects_with_commits()
     logging.info(f"Found {len(vulns_with_commits)} vulnerable projects with commits.")
 
-    # Only include projects that have at least one commit
-    filtered_vulns_with_commits = [proj for proj in vulns_with_commits if len(proj) > 2 and proj[2:]]
-    print_json(
-        [{"projectName": p, "projectUrl": u, "commits": commits}
-         for p, u, *commits in filtered_vulns_with_commits],
-        os.path.join(work_path, "data/general/vulns_projects_with_commits.json")
-    )
-    vulns_with_commits = filtered_vulns_with_commits
-
-    # Phase 1: Clone all projects in parallel
+    # Clone all projects
     clone_results = []
     max_workers = multiprocessing.cpu_count() * 6
     logging.info(f"Using {max_workers} workers for cloning projects.")
@@ -192,17 +183,12 @@ def main():
         for fut in concurrent.futures.as_completed(futures):
             clone_results.append(fut.result())
 
-    modules.prepare_projects.get_project_includes()
-
     projects = []
-    base_dir = os.path.join(os.getcwd(), "repositories", "OSS-Projects")
     for entry in os.listdir(base_dir):
         projects.append(os.path.join(base_dir, entry))
-    print("Anzahl geklonter Projekte: ", len(os.listdir(base_dir)))
+    logging.info("Anzahl geklonter Projekte: ", len(os.listdir(base_dir)))
 
-    # projects = projects[:100]  # Limit to first 100 projects for testing
-
-    # Phase 2: Calculate metrics
+    # Calculate metrics
     max_workers = multiprocessing.cpu_count() * 3
     with concurrent.futures.ProcessPoolExecutor(max_workers=max_workers) as pool:
         futures = [pool.submit(calculate_metrics, project_path) for project_path in projects]
@@ -210,7 +196,7 @@ def main():
             try:
                 future.result()
             except Exception as e:
-                print(f"Fehler bei Projekt: {e}")
+                logging.error(f"Fehler bei Projekt: {e}")
 
     # Final result calculations
     modules.calculate_results.separate_and_filter_calculated_metrics(thresholds)
