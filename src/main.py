@@ -16,6 +16,9 @@ import os
 import traceback
 import multiprocessing
 import concurrent.futures
+from pathlib import Path
+
+from modules.get_projects import process_arvo_projects
 
 def setup_logging():
     logging.basicConfig(
@@ -43,6 +46,7 @@ import modules.calculate_metrics
 import modules.retrieve_oss_fuzz_data
 import modules.calculate_results
 import modules.get_stacktraces
+import modules.retrieve_arvo_table_data
 
 
 # Thresholds for filtering metrics
@@ -116,7 +120,7 @@ def calculate_metrics(project_path):
     project_dir = os.path.basename(project_path)
     try:
         logging.info(f"Running metrics for {project_dir}...")
-        modules.calculate_metrics.run(project_path, False)
+        modules.calculate_metrics.run(project_path, True)
         return project_dir, True
 
     except Exception as e:
@@ -149,44 +153,70 @@ def main():
         None
     """
 
-    base_dir = os.path.join(os.getcwd(), "repositories", "OSS-Projects")
+    base_dir = os.path.join(os.getcwd(), "repositories")
 
-    # Prepare project
-    modules.prepare_projects.get_oss_repo()
-    modules.prepare_projects.get_arvo_meta()
-    modules.prepare_projects.filter_oss_projects()
-    modules.prepare_projects.get_oss_fuzz_vulns()
-    modules.prepare_projects.get_project_includes()
 
-    # Retrieve vulnerable projects
-    modules.retrieve_oss_fuzz_data.get_project_tuples_with_vulns()
-    modules.retrieve_oss_fuzz_data.get_oss_vulns_data_as_json()
-    modules.retrieve_oss_fuzz_data.update_missing_commits_in_vulns()
-    modules.retrieve_oss_fuzz_data.delete_unfixable_broken_commits()
-    modules.retrieve_oss_fuzz_data.get_new_oss_vuln_ids(128)
-    modules.retrieve_oss_fuzz_data.remove_vulns_that_are_not_in_arvo_table()
+    # Obsolete
+    # # Prepare project
+    # modules.prepare_projects.get_oss_repo()
+    # modules.prepare_projects.get_arvo_meta()
+    # modules.prepare_projects.filter_oss_projects()
+    # modules.prepare_projects.get_oss_fuzz_vulns()
+    # modules.prepare_projects.get_project_includes()
+    # modules.prepare_projects.get_arvo_table()
 
-    # Get stack traces
-    modules.get_stacktraces.get_stacktraces_from_table()
-    modules.get_stacktraces.extract_vuln_location()
+    # # Retrieve vulnerable projects
+    # modules.retrieve_oss_fuzz_data.get_project_tuples_with_vulns()
+    # modules.retrieve_oss_fuzz_data.get_oss_vulns_data_as_json()
+    # modules.retrieve_oss_fuzz_data.update_missing_commits_in_vulns()
+    # modules.retrieve_oss_fuzz_data.delete_unfixable_broken_commits()
+    # modules.retrieve_oss_fuzz_data.get_new_oss_vuln_ids(128)
+    # modules.retrieve_oss_fuzz_data.remove_vulns_that_are_not_in_arvo_table()
+
+    # # Get stack traces
+    # modules.get_stacktraces.get_stacktraces_from_table()
+    # modules.get_stacktraces.extract_vuln_location()
 
     # Extract commits
-    vulns_with_commits = modules.prepare_projects.get_vulnerable_projects_with_commits()
-    logging.info(f"Found {len(vulns_with_commits)} vulnerable projects with commits.")
+    # vulns_with_commits = modules.prepare_projects.get_vulnerable_projects_with_commits()
+    # logging.info(f"Found {len(vulns_with_commits)} vulnerable projects with commits.")
 
     # Clone all projects
-    clone_results = []
-    max_workers = multiprocessing.cpu_count() * 6
-    logging.info(f"Using {max_workers} workers for cloning projects.")
-    with concurrent.futures.ThreadPoolExecutor(max_workers) as pool:
-        futures = [pool.submit(clone_project, proj) for proj in vulns_with_commits]
-        for fut in concurrent.futures.as_completed(futures):
-            clone_results.append(fut.result())
+    # clone_results = []
+    # max_workers = multiprocessing.cpu_count() * 6
+    # logging.info(f"Using {max_workers} workers for cloning projects.")
+    # with concurrent.futures.ThreadPoolExecutor(max_workers) as pool:
+    #     futures = [pool.submit(clone_project, proj) for proj in vulns_with_commits]
+    #     for fut in concurrent.futures.as_completed(futures):
+    #         clone_results.append(fut.result())
+
+
+    # modules.prepare_projects.prepare_directories()
+    # modules.prepare_projects.get_arvo_table()
+    # modules.prepare_projects.get_clang_dependencies()
+
+    # modules.retrieve_arvo_table_data.export_per_project_crashes()
+    # modules.retrieve_arvo_table_data.extract_vuln_location()
+    # modules.retrieve_arvo_table_data.delete_null_locations_in_vuln()
+
+    # Extrahiere Quell- und Include-Dateien aus den ARVO Docker Images
+    # try:
+    #     process_arvo_projects(Path("data/arvo-projects"), Path("repositories"))
+    # except Exception as e:  # pragma: no cover
+    #     logging.error(f"Fehler bei process_arvo_projects: {e}")
+
+    modules.prepare_projects.get_project_includes()
 
     projects = []
     for entry in os.listdir(base_dir):
-        projects.append(os.path.join(base_dir, entry))
-    logging.info("Anzahl geklonter Projekte: ", len(os.listdir(base_dir)))
+        project = os.path.join(base_dir, entry)
+        if len(os.listdir(project)) <= 0:
+            continue
+
+        for e in os.listdir(project):
+            project_repo = os.path.join(project, e)
+            if e != "include" and os.path.isdir(project_repo):
+                projects.append(project_repo)
 
     # Calculate metrics
     max_workers = multiprocessing.cpu_count() * 3
@@ -199,7 +229,7 @@ def main():
                 logging.error(f"Fehler bei Projekt: {e}")
 
     # Final result calculations
-    modules.calculate_results.separate_and_filter_calculated_metrics(thresholds)
+    # modules.calculate_results.separate_and_filter_calculated_metrics(thresholds)
     modules.calculate_results.check_if_function_in_vulns()
     modules.calculate_results.calculate_infos()
 

@@ -80,184 +80,124 @@ def check_if_function_in_vulns():
     Returns:
         None
     """
-    single_metrics_dir = os.path.join(os.getcwd(), "data", "single-metrics")
-    vulns_dir = os.path.join(os.getcwd(), "data", "vulns")
-    output_dir = os.path.join(os.getcwd(), "data", "found-methods")
+    
+    base = os.getcwd()
+    metrics_dir = os.path.join(base, "data", "single-metrics")
+    vulns_dir = os.path.join(base, "data", "arvo-projects")
+    output_dir = os.path.join(base, "data", "found-methods")
+    general_dir = os.path.join(base, "data", "general")
+    # ensure each metric folder exists in output
+    metric_names = [m for m in os.listdir(metrics_dir) if os.path.isdir(os.path.join(metrics_dir, m))]
+    for metric_name in metric_names:
+        metric_out = os.path.join(output_dir, metric_name)
+        os.makedirs(metric_out, exist_ok=True)
+    # ensure each metric folder exists in not-found-methods
+    not_found_dir = os.path.join(base, "data", "not-found-methods")
+    for metric_name in metric_names:
+        metric_nf_out = os.path.join(not_found_dir, metric_name)
+        os.makedirs(metric_nf_out, exist_ok=True)
 
-    # Iterate through single-metric directory
-    for metric_name in os.listdir(single_metrics_dir):
-        metric_dir = os.path.join(single_metrics_dir, metric_name)
-        metric_result_dir = os.path.join(output_dir, metric_name)
-        os.makedirs(metric_result_dir, exist_ok=True)
+    # prepare per-metric counters and seen-sets to avoid double counting per project_localid
+    metric_counters = {m: {"total_vulns": 0, "found_vulns": 0} for m in metric_names}
+    metric_seen_total = {m: set() for m in metric_names}   # keys: project_localid
+    metric_seen_found = {m: set() for m in metric_names}   # keys: project_localid
 
-        # Iterate through each metric directory
-        for entry in os.listdir(metric_dir):
-            # project_name = entry.split('_')[0]
-            # commit_hash = entry.split('_')[1].split('.')[0]
-
-            basename, _ = os.path.splitext(entry)
-            project_name, commit_hash = basename.rsplit('_', 1)
-
-            project_metric_path = os.path.join(metric_dir, entry)
-            project_vulns_path = os.path.join(vulns_dir, project_name + ".json")
-
-            try:
-                with open(project_metric_path, 'r') as f:
-                    project_metrics = json.load(f)
-            except Exception:
-                print(f"Error reading metrics file: {project_metric_path}")
+    # iterate each project vulnerability file
+    for vuln_file in os.listdir(vulns_dir):
+        if not vuln_file.endswith('.json'):
+            continue
+        project = os.path.splitext(vuln_file)[0]
+        vuln_path = os.path.join(vulns_dir, vuln_file)
+        try:
+            with open(vuln_path, 'r', encoding='utf-8') as vf:
+                vuln_list = json.load(vf)
+        except Exception:
+            continue
+        # for each vulnerability entry
+        for vuln in vuln_list:
+            local_id = vuln.get('localID')
+            loc = vuln.get('location', {})
+            loc_file = loc.get('file')
+            loc_func = loc.get('function', '')
+            if not local_id or not loc_file or not loc_func:
                 continue
-
-            try:
-                with open(project_vulns_path, 'r') as f:
-                    project_vulns = json.load(f)
-            except Exception:
-                print(f"Error reading metrics file: {project_vulns_path}")
-                continue
-
-            # Get the vulns for the specific commit
-            vulns_for_commit = [
-                v for v in project_vulns
-                if v.get("introduced_commit") == commit_hash
-            ]
-            
-            for v in project_vulns:
-                if v.get("introduced_commit") is None:
-                    logging.info(f"Vulnerability {v.get('id')} in {project_name} has no introduced commit, skipping.")
+            # normalize function name without parameters
+            func_name = loc_func.split('(')[0]
+            # check each metric folder for matching single-metric data
+            for metric_name in os.listdir(metrics_dir):
+                sm_file = os.path.join(metrics_dir, metric_name, f"{project}_{local_id}.json")
+                if not os.path.exists(sm_file):
                     continue
-            
-            if not vulns_for_commit:
-                continue
-
-            # Dictionary to store matches
-            matches = {}
-            for file_path, funcs in project_metrics.items():
-                for func_name, metrics in funcs.items():
-                    func_name = func_name.split('(')[0]
-                    # Prüfen, ob func_name in einer Vulnerability auftaucht
-                    for vuln in vulns_for_commit:
-                        if vuln.get("method") == func_name:
-                            # Treffer speichern
-                            matches.setdefault(file_path, {}) \
-                                   .setdefault(func_name, []) \
-                                   .append({
-                                       "id": vuln.get("id"),
-                                       "summary": vuln.get("summary"),
-                                       "metric_name": metric_name
-                                   })
-            
-            # If matches found, write to output file
-            if matches:
-                output_path = os.path.join(metric_result_dir, f"{project_name}_{commit_hash}.json")
+                # count this sm_file as a candidate (total_vulns) only once per metric
+                sm_key = f"{project}_{local_id}"
+                if sm_key not in metric_seen_total.get(metric_name, set()):
+                    metric_counters[metric_name]["total_vulns"] += 1
+                    metric_seen_total[metric_name].add(sm_key)
                 try:
-                    with open(output_path, 'w', encoding='utf-8') as fout:
-                        json.dump(matches, fout, indent=2, ensure_ascii=False)
-                except Exception as e:
-                    logging.info(f"Fehler beim Schreiben der Output-Datei {output_path}: {e}")
-            # Compute and write missing vulnerabilities for debugging
-            # Determine found IDs
-            found_ids = {
-                vuln_info['id']
-                for funcs in matches.values()
-                for vulns_list in funcs.values()
-                for vuln_info in vulns_list
-                if 'id' in vuln_info
-            }
-            # Identify vulnerabilities not matched
-            missing_vulns = [
-                v for v in vulns_for_commit
-                if v.get('id') not in found_ids
-            ]
+                    with open(sm_file, 'r', encoding='utf-8') as sf:
+                        sm_data = json.load(sf)
+                except Exception:
+                    continue
 
-            missing_output_path = os.path.join(os.getcwd(), "data", "not-found-methods")
+                # track if this vulnerability function signature was found for this metric
+                match_found = False
 
-            if missing_vulns:
-                missing_output_path = os.path.join(
-                    missing_output_path,
-                    f"{project_name}_{commit_hash}_missing.json"
-                )
-                try:
-                    with open(missing_output_path, 'w', encoding='utf-8') as fmiss:
-                        json.dump(missing_vulns, fmiss, indent=2, ensure_ascii=False)
-                except Exception as e:
-                    logging.info(f"Fehler beim Schreiben der Missing-Datei {missing_output_path}: {e}")
+                # find matching file path in single-metric data
+                for code_path, funcs in sm_data.items():
+                    if code_path.endswith(loc_file):
+                        # find matching function signature
+                        for sig, values in funcs.items():
+                            if sig.split('(')[0] == func_name:
+                                match_found = True
+                                # prepare output file for this metric and vuln
+                                out_path = os.path.join(output_dir, metric_name, f"{project}_{local_id}.json")
+                                # load existing or new container
+                                try:
+                                    with open(out_path, 'r', encoding='utf-8') as of:
+                                        out_data = json.load(of)
+                                except Exception:
+                                    out_data = {}
+                                # append this vulnerability under code_path and signature
+                                out_data.setdefault(code_path, {}).setdefault(sig, []).append({'id': local_id})
+                                # write back
+                                with open(out_path, 'w', encoding='utf-8') as of:
+                                    json.dump(out_data, of, indent=2, ensure_ascii=False)
+                                # count as found_vulns only once per sm_file
+                                if sm_key not in metric_seen_found.get(metric_name, set()):
+                                    metric_counters[metric_name]["found_vulns"] += 1
+                                    metric_seen_found[metric_name].add(sm_key)
+                # if no matching signature found, record in not-found-methods
+                if not match_found:
+                    nf_path = os.path.join(not_found_dir, metric_name, f"{project}_{local_id}.json")
+                    try:
+                        with open(nf_path, 'r', encoding='utf-8') as nf:
+                            nf_data = json.load(nf)
+                    except Exception:
+                        nf_data = {}
+                    # record missing function name under file
+                    nf_data.setdefault(loc_file, []).append(func_name)
+                    with open(nf_path, 'w', encoding='utf-8') as nf:
+                        json.dump(nf_data, nf, indent=2, ensure_ascii=False)
 
-def calculate_infos():
-    """
-    Calculate summary statistics of vulnerabilities discovered by metrics.
+    # At end of processing, write per-metric results into general/result.json
+    result_path = os.path.join(general_dir, "result.json")
+    try:
+        # load existing to preserve other keys if necessary, otherwise start fresh
+        try:
+            with open(result_path, 'r', encoding='utf-8') as rf:
+                result_data = json.load(rf)
+        except Exception:
+            result_data = {}
 
-    Args:
-        None
-
-    Returns:
-        dict: Summary containing:
-            total_vulns (int): Total number of vulnerabilities across all projects.
-            found_vulns (int): Total number of vulnerabilities found by metrics.
-            metrics (dict): Mapping each metric name to a dict with:
-                found_vulns (int): Vulnerabilities found for the metric.
-                found_percentage (float): Percentage of total vulnerabilities found.
-    """
-    base_dir = os.getcwd()
-    vulns_dir = os.path.join(base_dir, "data", "vulns")
-    found_dir = os.path.join(base_dir, "data", "found-methods")
-    output_dir = os.path.join(base_dir, "data", "general")
-
-    # Load all vulnerabilities by project
-    project_vulns = {}
-    total_vulns = 0
-    for vuln_file in glob.glob(os.path.join(vulns_dir, "*.json")):
-        project = Path(vuln_file).stem
-        with open(vuln_file, 'r', encoding='utf-8') as f:
-            vuln_list = json.load(f)
-        project_vulns[project] = vuln_list
-        total_vulns += len(vuln_list)
-
-    # Initialize metric summaries
-    metrics_summary = {}
-    for metric in os.listdir(found_dir):
-        metrics_summary[metric] = {"found_vulns": 0}
-
-    total_found = 0
-    # Aggregate found vulnerabilities per metric
-    for metric, summary in metrics_summary.items():
-        metric_path = os.path.join(found_dir, metric)
-        for entry in os.listdir(metric_path):
-            project = entry.split('_', 1)[0]
-            file_path = os.path.join(metric_path, entry)
-            with open(file_path, 'r', encoding='utf-8') as f:
-                found_data = json.load(f)
-
-            # Collect unique vulnerability IDs found in this entry
-            found_ids = {
-                vuln['id']
-                for funcs in found_data.values()
-                for vulns_list in funcs.values()
-                for vuln in vulns_list
-                if 'id' in vuln
+        # insert/overwrite per-metric entries
+        for metric, counters in metric_counters.items():
+            result_data[metric] = {
+                "total_vulns": counters["total_vulns"],
+                "found_vulns": counters["found_vulns"]
             }
 
-            # Intersect with the project's known vulnerabilities
-            known_ids = {v['id'] for v in project_vulns.get(project, []) if 'id' in v}
-            valid_ids = found_ids & known_ids
-
-            count = len(valid_ids)
-            summary['found_vulns'] += count
-            total_found += count
-
-    # Compute percentages
-    for summary in metrics_summary.values():
-        summary['found_percentage'] = (summary['found_vulns'] / total_vulns * 100) if total_vulns else 0
-
-    results = {
-        "total_vulns": total_vulns,
-        "found_vulns": total_found,
-        "metrics": metrics_summary
-    }
-
-    # Save the results
-    output_file = os.path.join(output_dir, "results.json")
-    with open(output_file, 'w', encoding='utf-8') as out_f:
-        json.dump(results, out_f, indent=2, ensure_ascii=False)
-
-    logging.info(f"Results saved to {output_file}")
-    return results
+        with open(result_path, 'w', encoding='utf-8') as wf:
+            json.dump(result_data, wf, indent=2, ensure_ascii=False)
+        logging.info(f"Metric results written to {result_path}")
+    except Exception as e:
+        logging.info(f"Fehler beim Schreiben der Ergebnisdatei {result_path}: {e}")

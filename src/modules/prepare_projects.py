@@ -30,12 +30,14 @@ def prepare_directories():
         os.path.join(current_dir, "data"),
         os.path.join(current_dir, "data", "general"),
         os.path.join(current_dir, "data", "metrics"),
-        os.path.join(current_dir, "data", "vulns"),
+        os.path.join(current_dir, "data", "includes"),
+        os.path.join(current_dir, "data", "found-methods"),
+        # os.path.join(current_dir, "data", "vulns"),
         os.path.join(current_dir, "repositories"),
-        os.path.join(current_dir, "repositories", "OSS-Projects"),
-        os.path.join(current_dir, "repositories", "OSS-Repo"),
-        os.path.join(current_dir, "repositories", "OSS-Vulns"),
-        os.path.join(current_dir, "repositories", "ARVO-Meta"),
+        # os.path.join(current_dir, "repositories", "OSS-Projects"),
+        # os.path.join(current_dir, "repositories", "OSS-Repo"),
+        # os.path.join(current_dir, "repositories", "OSS-Vulns"),
+        # os.path.join(current_dir, "repositories", "ARVO-Meta"),
         os.path.join(current_dir, "data", "single-metrics"),
         os.path.join(current_dir, "data", "single-metrics", "lines of code"),
         os.path.join(current_dir, "data", "single-metrics", "cyclomatic complexity"),
@@ -54,9 +56,8 @@ def prepare_directories():
         os.path.join(current_dir, "data", "single-metrics", "number of variables involved in control predicates"),
         os.path.join(current_dir, "data", "found-methods"),
         os.path.join(current_dir, "data", "not-found-methods"),
-        os.path.join(current_dir, "data", "missing_commits"),
-        os.path.join(current_dir, "data", "debug_reports"),
-        os.path.join(current_dir, "logs", "cloning_errors"),
+        # os.path.join(current_dir, "data", "missing_commits"),
+        # os.path.join(current_dir, "logs", "cloning_errors"),
     ]
 
     for directory in directories:
@@ -127,6 +128,45 @@ def get_arvo_meta():
     logging.info("Klonen des ARVO-Meta Repositories...")
     cmd = ["git", "clone", "https://github.com/n132/ARVO-Meta.git", "--depth=1", arvo_meta_path]
     subprocess.run(cmd, check=True)
+
+def get_arvo_table():
+    """
+    Download the ARVO database (arvo.db) into the project root if it's missing.
+
+    Source:
+        https://github.com/n132/ARVO-Meta/releases/download/v2.0.0/arvo.db
+
+    Behavior:
+      - If arvo.db already exists in the CWD, skip download.
+      - Otherwise, download quietly via wget and place it as ./arvo.db
+      - Log progress and any errors.
+    """
+    current_dir = os.getcwd()
+    target_path = os.path.join(current_dir, "arvo.db")
+    url = "https://github.com/n132/ARVO-Meta/releases/download/v2.0.0/arvo.db"
+
+    # Skip if file already exists and is non-empty
+    if os.path.exists(target_path) and os.path.getsize(target_path) > 0:
+        logging.info("arvo.db existiert bereits, überspringe Download…")
+        return
+
+    try:
+        logging.info("Lade arvo.db herunter…")
+        subprocess.run(["wget", "-q", url, "-O", target_path], check=True)
+        # Basic validation
+        if not os.path.exists(target_path) or os.path.getsize(target_path) == 0:
+            raise RuntimeError("Heruntergeladene arvo.db ist leer oder fehlt.")
+        logging.info(f"arvo.db erfolgreich nach {target_path} heruntergeladen.")
+    except subprocess.CalledProcessError as cpe:
+        logging.info(f"Fehler beim Herunterladen von arvo.db: returncode={cpe.returncode}")
+        # Cleanup incomplete file if present
+        try:
+            if os.path.exists(target_path) and os.path.getsize(target_path) == 0:
+                os.remove(target_path)
+        except Exception:
+            pass
+    except Exception as e:
+        logging.info(f"Unerwarteter Fehler beim Herunterladen von arvo.db: {e}")
 
 def filter_oss_projects() -> list[(str, str)]:
     """
@@ -421,8 +461,7 @@ def get_project_includes():
     logging.info("Erzeuge Include-Listen für OSS-Projects...")
     cwd = os.getcwd()
     includes_path = os.path.join(cwd, "data", "includes")
-    os.makedirs(includes_path, exist_ok=True)
-    oss_projects_path = os.path.join(cwd, "repositories", "OSS-Projects")
+    oss_projects_path = os.path.join(cwd, "repositories")
     
     for entry in os.listdir(oss_projects_path):
         project_dir = os.path.join(oss_projects_path, entry)
@@ -455,7 +494,6 @@ def get_general_includes():
     logging.info("Erzeuge allgemeine Include-Liste für LLVM Clang...")
     cwd = os.getcwd()
     includes_path = os.path.join(cwd, "data", "includes")
-    os.makedirs(includes_path, exist_ok=True)
     # Pfad zum Clang Include-Verzeichnis
     clang_include_dir = os.path.join(cwd, "LLVM-20.1.8-Linux-X64", "lib", "clang", "20", "include")
     general_includes = []
