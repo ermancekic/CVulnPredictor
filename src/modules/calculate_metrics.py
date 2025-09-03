@@ -61,6 +61,9 @@ def get_project_name(source_path):
     path = os.path.normpath(source_path)
     basename = os.path.basename(path)
     parent = os.path.basename(os.path.dirname(path))
+
+    if basename.lower() == 'work' and parent:
+        return parent
     # If parent folder already encodes project and ID (e.g., 'proj_ID'), and basename equals proj,
     # avoid duplication and return parent only
     if parent and (parent.startswith(f"{basename}_") or parent.endswith(f"_{basename}")):

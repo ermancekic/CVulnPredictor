@@ -5,9 +5,10 @@ gesammelt. Für jede localID wird das Docker Image "cr.cispa.de/d/n132/arvo:<loc
 
 1. Zielordner repositories/<projektname>_<localID> wird erstellt.
 2. Image wird (falls nötig) gepullt und ein Container erzeugt.
-3. Aus dem Container werden die Pfade /src/<projektname> und /usr/include in den Zielordner kopiert.
-4. Container wird entfernt und Image wieder gelöscht (konfigurierbar).
-5. Idempotenz: Wenn bereits vollständig extrahiert wurde, wird das Paar übersprungen.
+3. Im Container wird 'arvo compile' ausgeführt.
+4. Aus dem Container werden die Pfade /src/<projektname>, /usr/include und /work in den Zielordner kopiert.
+5. Container wird gestoppt/entfernt und Image wieder gelöscht (konfigurierbar).
+6. Idempotenz: Wenn bereits vollständig extrahiert wurde, wird das Paar übersprungen.
 """
 
 from __future__ import annotations
@@ -17,7 +18,6 @@ import json
 import logging
 import os
 import subprocess
-import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -33,7 +33,7 @@ except Exception:  # pragma: no cover
 
 
 LOG = logging.getLogger(__name__)
-DEFAULT_MAX_WORKERS = max(4, (os.cpu_count() or 8))  # IO-bound: eher mehr Threads
+DEFAULT_MAX_WORKERS = 32
 
 
 def _run(cmd: List[str], *, check: bool = True, capture_output: bool = False) -> subprocess.CompletedProcess:
@@ -95,17 +95,20 @@ def _already_extracted(dest_dir: Path, project: str, require_both: bool = True) 
     marker = _read_marker(dest_dir)
     expected_src = dest_dir / project
     expected_inc = dest_dir / "include"
+    expected_work = dest_dir / "work"
+
     src_ok = _dir_nonempty(expected_src)
     inc_ok = _dir_nonempty(expected_inc)
+    work_ok = _dir_nonempty(expected_work)
 
     # Wenn Marker "completed" ist, vertrauen wir ihm (schnellster Check)
     if marker and marker.get("completed") is True:
         return True
 
-    # Fallback: Wenn beide (oder mind. einer) Pfade vorhanden sind
+    # Fallback: Wenn alle (oder mind. einer) Pfade vorhanden sind
     if require_both:
-        return src_ok and inc_ok
-    return src_ok or inc_ok
+        return src_ok and inc_ok and work_ok
+    return src_ok or inc_ok or work_ok
 
 
 def _image_id(image_tag: str) -> Optional[str]:
@@ -122,7 +125,7 @@ def _copy_if_missing(container_id: str, src_in_container: str, dest_dir: Path) -
     Kopiere Verzeichnis aus Container, falls im Ziel noch nicht vorhanden oder leer.
     Gibt (name_im_ziel, copied_bool, error_msg_or_None) zurück.
     """
-    name = Path(src_in_container).name  # z.B. "<project>" oder "include"
+    name = Path(src_in_container).name  # z.B. "<project>", "include" oder "work"
     target = dest_dir / name
     if _dir_nonempty(target):
         LOG.debug("Ziel bereits vorhanden, überspringe Copy: %s", target)
@@ -132,7 +135,7 @@ def _copy_if_missing(container_id: str, src_in_container: str, dest_dir: Path) -
         LOG.debug("Kopiert %s -> %s", src_in_container, dest_dir)
         return name, True, None
     except subprocess.CalledProcessError as e:
-        LOG.warning("Pfad fehlt im Image: %s (%s)", src_in_container, e)
+        LOG.warning("Pfad fehlt im Image/Container: %s (%s)", src_in_container, e)
         return name, False, str(e)
 
 
@@ -159,7 +162,7 @@ def _process_one(
         return project, local_id, True, msg
 
     if dry_run:
-        msg = f"DRY-RUN: Würde verarbeiten {image_tag} -> {dest_dir}"
+        msg = f"DRY-RUN: Würde verarbeiten {image_tag} -> {dest_dir} (inkl. 'arvo compile' & /work)"
         LOG.info(msg)
         return project, local_id, True, msg
 
@@ -183,15 +186,28 @@ def _process_one(
             LOG.error(msg)
             return project, local_id, False, msg
 
+        # Container starten und 'arvo compile' ausführen
+        try:
+            _run(["docker", "start", container_id])
+            # exakt wie gefordert: "arvo compile"
+            # via Login-Shell (-lc), damit ENV/Path korrekt sind
+            _run(["docker", "exec", container_id, "bash", "-lc", "arvo compile"])
+            LOG.info("%s: 'arvo compile' erfolgreich ausgeführt", image_tag)
+        except subprocess.CalledProcessError as e:
+            err = f"'arvo compile' fehlgeschlagen: {e}"
+            LOG.warning("%s: %s", image_tag, err)
+            errors.append(err)
+            # Weiterkopieren versuchen – ggf. existiert /work trotzdem
+
         # Ziele kopieren (nur fehlende)
-        src_paths = [f"/src/{project}", "/usr/include"]
+        src_paths = [f"/src/{project}", "/usr/include", "/work"]
         for sp in src_paths:
             name, copied, err = _copy_if_missing(container_id, sp, dest_dir)
             copied_any = copied_any or copied
             if err:
                 errors.append(f"{sp}: {err}")
 
-        # Marker schreiben (completed nur, wenn beide Ziele vorhanden)
+        # Marker schreiben (completed nur, wenn alle drei Ziele vorhanden)
         payload = {
             "image_tag": image_tag,
             "image_id": _image_id(image_tag),
@@ -201,13 +217,14 @@ def _process_one(
             "paths": {
                 project: _dir_nonempty(dest_dir / project),
                 "include": _dir_nonempty(dest_dir / "include"),
+                "work": _dir_nonempty(dest_dir / "work"),
             },
         }
-        payload["completed"] = bool(payload["paths"][project] and payload["paths"]["include"])
+        payload["completed"] = all(payload["paths"].values())
         _write_marker(dest_dir, payload)
 
         if errors and not payload["completed"]:
-            msg = f"Teilweise kopiert, fehlende Pfade: {', '.join(errors)}"
+            msg = f"Teilweise kopiert/kompiliert, fehlend/Fehler: {', '.join(errors)}"
             LOG.warning(msg)
             return project, local_id, False, msg
 
@@ -217,6 +234,11 @@ def _process_one(
 
     finally:
         if container_id:
+            # sauber stoppen, dann entfernen
+            try:
+                _run(["docker", "stop", container_id], check=False)
+            except subprocess.CalledProcessError:
+                LOG.debug("Container Stop fehlgeschlagen: %s", container_id)
             try:
                 _run(["docker", "rm", container_id])
             except subprocess.CalledProcessError:
@@ -318,7 +340,9 @@ def _configure_logging(verbose: bool) -> None:
 
 
 def main(argv: Iterable[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Extrahiere Quellen & Includes aus n132/arvo Images (parallel & idempotent)")
+    parser = argparse.ArgumentParser(
+        description="Extrahiere Quellen & Includes aus n132/arvo Images (parallel & idempotent, inkl. 'arvo compile' & /work)"
+    )
     parser.add_argument("--arvo-dir", type=Path, default=Path("data/arvo-projects"), help="Pfad zu arvo-project JSONs")
     parser.add_argument("--repositories", type=Path, default=Path("repositories"), help="Zielbasisordner")
     parser.add_argument("--dry-run", action="store_true", help="Nur anzeigen, nichts ausführen")
