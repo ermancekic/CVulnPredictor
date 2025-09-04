@@ -29,16 +29,16 @@ def separate_and_filter_calculated_metrics(thresholds):
     metrics_dir = os.path.join(base, "data", "metrics")
     single_metrics_dir = os.path.join(base, "data", "single-metrics")
 
-    # Komplettes Aufräumen der Ausgabeverzeichnisse
+    # Complete cleanup of output directories
     if os.path.exists(single_metrics_dir):
         shutil.rmtree(single_metrics_dir)
     os.makedirs(single_metrics_dir, exist_ok=True)
 
-    # Voraus anlegen aller Metrik-Unterordner (während thresholds bekannt)
+    # Pre-create all metric subdirectories (while thresholds are known)
     for metric_name in thresholds:
         os.makedirs(os.path.join(single_metrics_dir, metric_name), exist_ok=True)
 
-    # Für jede Eingabedatei (Projekt/Commit) einmal einlesen und filtern
+    # For each input file (project/commit), read and filter once
     for entry in os.listdir(metrics_dir):
         input_path = os.path.join(metrics_dir, entry)
         try:
@@ -49,18 +49,18 @@ def separate_and_filter_calculated_metrics(thresholds):
             logging.info(f"Fehler beim Lesen von {input_path}: {e}")
             continue
 
-        # Sammelstruktur: metric_name -> file_name -> function_name -> {metric_name: value}
+        # Collection structure: metric_name -> file_name -> function_name -> {metric_name: value}
         filtered = defaultdict(lambda: defaultdict(dict))
 
         for file_name, functions in metrics_data.items():
             for func_name, metrics in functions.items():
-                # func_name bleibt vollständig erhalten
+                # func_name remains fully intact
                 for metric_name, metric_value in metrics.items():
                     if metric_name in thresholds and metric_value >= thresholds[metric_name]:
-                        # nur hier einmal anlegen, kein wiederholtes makedirs
+                        # only create here once, no repeated makedirs
                         filtered[metric_name][file_name].setdefault(func_name, {})[metric_name] = metric_value
 
-        # Nun pro Metrik-Ordner genau eine Datei schreiben
+        # Now write exactly one file per metric folder
         for metric_name, file_dict in filtered.items():
             out_dir = os.path.join(single_metrics_dir, metric_name)
             out_path = os.path.join(out_dir, entry)
@@ -72,10 +72,10 @@ def separate_and_filter_calculated_metrics(thresholds):
 
 def _strip_templates(s: str) -> str:
     """
-    Entfernt Template-Argumente, z.B.:
+    Removes template arguments, e.g.:
       'Visit<arrow::Int8Type>'              -> 'Visit'
       'Foo<Bar<Baz>, Qux>'                  -> 'Foo'
-    Arbeitet mit verschachtelten '<...>'.
+    Works with nested '<...>'.
     """
     out = []
     depth = 0
@@ -92,8 +92,8 @@ def _strip_templates(s: str) -> str:
 
 def _base_func_name(sig: str) -> str:
     """
-    Liefert den nackten Funktionsnamen ohne Namespace, Parameter, Qualifier und Template-Argumente.
-    Beispiele:
+    Returns the bare function name without namespace, parameters, qualifiers, and template arguments.
+    Examples:
       "pcpp::DnsLayer::parseResources()" -> "parseResources"
       "arrow::Status arrow::VisitArrayInline<...>(...)" -> "VisitArrayInline"
       "Visit<arrow::Int8Type>" -> "Visit"
@@ -108,34 +108,34 @@ def _base_func_name(sig: str) -> str:
 
     s = sig.strip()
 
-    # ---- Spezialfall: Operatoren (erhalten Symbole wie <<, [], (), new[])
+    # ---- Special case: Operators (preserve symbols like <<, [], (), new[])
     op_idx = s.find('operator')
     if op_idx != -1:
-        # ab 'operator' bis vor die Parameterklammer
+        # from 'operator' up to before the parameter parenthesis
         op = s[op_idx:].split('(', 1)[0].strip()
-        # Namespaces vor operator entfernen (z.B. "A::B::operator<<")
+        # Remove namespaces before operator (e.g. "A::B::operator<<")
         if '::' in op:
             op = op.rsplit('::', 1)[-1]
-        # Falls es explizit 'operator' ohne Symbol ist, trotzdem so zurückgeben
+        # If it's explicitly 'operator' without symbol, still return it as is
         return op if op else 'operator'
 
-    # ---- Normale Funktionen
-    # Parameter/Trailing-Qualifier weg
+    # ---- Normal functions
+    # Remove parameters/trailing qualifiers
     idx = s.rfind('(')
     if idx != -1:
         s = s[:idx].strip()
 
-    # Template-Argumente robust entfernen (nach Operator-Check!)
+    # Robustly remove template arguments (after operator check!)
     s = _strip_templates(s)
 
-    # Whitespace normalisieren
+    # Normalize whitespace
     s = ' '.join(s.split())
 
-    # letzten Namespace-Teil nehmen
+    # Take the last namespace part
     if '::' in s:
         s = s.rsplit('::', 1)[-1].strip()
 
-    # führende Spezifizierer (static, inline, virtual, Rückgabetyp etc.) entfernen
+    # Remove leading specifiers (static, inline, virtual, return type etc.)
     parts = s.split(' ')
     name = parts[-1] if parts else s
 
@@ -143,34 +143,34 @@ def _base_func_name(sig: str) -> str:
 
 def _normalize_loc_path(p: str) -> str:
     """
-    Entfernt alles bis einschließlich der letzten '..'-Sequenz und normalisiert Slashes.
-    Beispiele:
+    Removes everything up to and including the last '..' sequence and normalizes slashes.
+    Examples:
       '/a/b/../../src/x.h' -> 'src/x.h'
       'a/../b/../c/d.h'    -> 'c/d.h'
       'src/x.h'            -> 'src/x.h'
     """
     if not p:
         return ""
-    # Einheitliche Slashes
+    # Uniform slashes
     p = p.replace('\\', '/')
-    # Komponenten ohne leere/`.`-Segmente
+    # Components without empty/'.' segments
     parts = [seg for seg in p.split('/') if seg not in ("", ".")]
-    # Index der letzten '..'
+    # Index of the last '..'
     last_dd = -1
     for i, seg in enumerate(parts):
         if seg == "..":
             last_dd = i
-    # Alles bis zur letzten '..' wegschneiden
+    # Cut off everything up to the last '..'
     if last_dd != -1:
         parts = parts[last_dd + 1:]
-    # Wieder zusammenbauen
+    # Reassemble
     return "/".join(parts)
 
 def check_if_function_in_vulns():
     """
     Identify functions from single-metrics that match known vulnerabilities and write results.
-    Pfadvergleich nutzt eine normalisierte Vulnerability-Datei (.. und davor abgeschnitten),
-    Funktionsvergleich nutzt nur den nackten Funktionsnamen (ohne Namespace).
+    Path comparison uses a normalized vulnerability file (.. and before cut off),
+    function comparison uses only the bare function name (without namespace).
     """
     base = os.getcwd()
     metrics_dir = os.path.join(base, "data", "single-metrics")
@@ -206,7 +206,7 @@ def check_if_function_in_vulns():
             with open(vuln_path, 'r', encoding='utf-8') as vf:
                 vuln_list = json.load(vf)
         except Exception as e:
-            logging.info(f"Fehler beim Lesen von {vuln_path}: {e}")
+            logging.info(f"Error reading {vuln_path}: {e}")
             continue
 
         for vuln in vuln_list:
@@ -218,12 +218,12 @@ def check_if_function_in_vulns():
             if not local_id or not loc_file_raw or not loc_func_raw:
                 continue
 
-            # Vulnerability-Dateipfad normalisieren: alles bis inkl. letzter '..' abschneiden
+            # Normalize vulnerability file path: cut off everything up to and including the last '..'
             loc_file = _normalize_loc_path(loc_file_raw)
             if not loc_file:
                 continue
 
-            # Nur nackter Funktionsname
+            # Only bare function name
             func_name = _base_func_name(loc_func_raw)
 
             for metric_name in metric_names:
@@ -240,7 +240,7 @@ def check_if_function_in_vulns():
                     with open(sm_file, 'r', encoding='utf-8') as sf:
                         sm_data = json.load(sf)
                 except Exception as e:
-                    logging.info(f"Fehler beim Lesen von {sm_file}: {e}")
+                    logging.info(f"Error reading {sm_file}: {e}")
                     continue
 
                 match_found = False
@@ -248,7 +248,7 @@ def check_if_function_in_vulns():
                 for code_path, funcs in sm_data.items():
                     # code_path vereinheitlichen (nur Slashes)
                     code_path_norm = code_path.replace('\\', '/')
-                    # Vergleich über das Ende: code_path muss auf den bereinigten loc_file enden
+                    # Comparison by end: code_path must end with the cleaned loc_file
                     if not code_path_norm.endswith(loc_file):
                         continue
 
@@ -263,14 +263,14 @@ def check_if_function_in_vulns():
                             except Exception:
                                 out_data = {}
 
-                            # In der Ausgabe: Key = originaler code_path, Funktionskey = nackter Name
+                            # In output: Key = original code_path, function key = bare name
                             out_data.setdefault(code_path, {}).setdefault(sig_base, []).append({'id': local_id})
 
                             try:
                                 with open(out_path, 'w', encoding='utf-8') as of:
                                     json.dump(out_data, of, indent=2, ensure_ascii=False)
                             except Exception as e:
-                                logging.info(f"Fehler beim Schreiben von {out_path}: {e}")
+                                logging.info(f"Error writing {out_path}: {e}")
 
                             if sm_key not in metric_seen_found[metric_name]:
                                 metric_counters[metric_name]["found_vulns"] += 1
@@ -283,13 +283,13 @@ def check_if_function_in_vulns():
                             nf_data = json.load(nf)
                     except Exception:
                         nf_data = {}
-                    # not-found mit bereinigtem Pfad
+                    # not-found with cleaned path
                     nf_data.setdefault(loc_file, []).append(func_name)
                     try:
                         with open(nf_path, 'w', encoding='utf-8') as nf:
                             json.dump(nf_data, nf, indent=2, ensure_ascii=False)
                     except Exception as e:
-                        logging.info(f"Fehler beim Schreiben von {nf_path}: {e}")
+                        logging.info(f"Error writing {nf_path}: {e}")
 
     # write general/result.json
     result_path = os.path.join(general_dir, "result.json")
@@ -310,4 +310,4 @@ def check_if_function_in_vulns():
             json.dump(result_data, wf, indent=2, ensure_ascii=False)
         logging.info(f"Metric results written to {result_path}")
     except Exception as e:
-        logging.info(f"Fehler beim Schreiben der Ergebnisdatei {result_path}: {e}")
+        logging.info(f"Error writing result file {result_path}: {e}")

@@ -38,17 +38,17 @@ def _normalize(name: str) -> str:
 
 def export_per_project_crashes():
 	"""
-	Liest arvo.db ein und erzeugt je "project" eine JSON-Datei mit Feldern:
+	Reads arvo.db and generates a JSON file for each "project" with fields:
 	  - localID
 	  - crash_type
 	  - crash_output
 	  - severity
 
-	Dateien werden unter data/arvo-projects/<project>.json gespeichert.
+	Files are saved under data/arvo-projects/<project>.json.
 
 	Args:
-		db_path: Pfad zur arvo.db (Default: ./arvo.db)
-		out_dir: Ausgabeverzeichnis (Default: ./data/arvo-projects)
+		db_path: Path to arvo.db (Default: ./arvo.db)
+		out_dir: Output directory (Default: ./data/arvo-projects)
 	"""
 	cwd = os.getcwd()
 	db_path = os.path.join(cwd, "arvo.db")
@@ -57,7 +57,7 @@ def export_per_project_crashes():
 	os.makedirs(out_dir, exist_ok=True)
 
 	if not os.path.exists(db_path):
-		logging.info(f"arvo.db nicht gefunden: {db_path}")
+		logging.info(f"arvo.db not found: {db_path}")
 		return
 
 	target_norm = {
@@ -76,37 +76,37 @@ def export_per_project_crashes():
 		conn.row_factory = sqlite3.Row
 		cur = conn.cursor()
 
-		# Alle Tabellen auflisten (ohne sqlite internen Tabellen)
+		# List all tables (excluding sqlite internal tables)
 		cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
 		tables = [r[0] for r in cur.fetchall()]
 
 		for tbl in tables:
 			try:
-				# Spalteninformationen lesen
+				# Read column information
 				cur.execute(f"PRAGMA table_info('{tbl}')")
 				cols = [r[1] for r in cur.fetchall()]
 				if not cols:
 					continue
 
-				# Mapping: gewünschter Normalname -> tatsächlicher Spaltenname
+				# Mapping: desired normalized name -> actual column name
 				norm_to_actual: Dict[str, str] = {}
 				normalized_cols = { _normalize(c): c for c in cols }
 
-				# Kandidaten für 'project' etwas großzügiger matchen (project, projectname)
+				# Match candidates for 'project' more generously (project, projectname)
 				for cand in ("project", "projectname"):
 					if cand in normalized_cols and "project" not in norm_to_actual:
 						norm_to_actual["project"] = normalized_cols[cand]
 
-				# Direktes Matching für die restlichen Zielspalten
+				# Direct matching for the remaining target columns
 				for need in ("localid", "crashtype", "crashoutput", "severity"):
 					if need in normalized_cols and need not in norm_to_actual:
 						norm_to_actual[need] = normalized_cols[need]
 
-				# Wenn es keine Projektspalte gibt, überspringen
+				# If there is no project column, skip
 				if "project" not in norm_to_actual:
 					continue
 
-				# SELECT-Liste dynamisch aufbauen; fehlende Spalten als NULL aliasen
+				# Build SELECT list dynamically; alias missing columns as NULL
 				select_parts = [f"'{tbl}' AS _table"]
 				for need, out_key in target_norm.items():
 					if need == "project":
@@ -114,7 +114,7 @@ def export_per_project_crashes():
 						select_parts.append(f"\"{actual}\" AS project")
 						continue
 					actual = norm_to_actual.get(need)
-					alias = out_key  # gewünschter Ausgabename
+					alias = out_key  # desired output name
 					if actual:
 						select_parts.append(f"\"{actual}\" AS \"{alias}\"")
 					else:
@@ -137,10 +137,10 @@ def export_per_project_crashes():
 					project_entries.setdefault(str(project), []).append(entry)
 
 			except Exception as e:
-				logging.info(f"Fehler beim Lesen der Tabelle {tbl}: {e}")
+				logging.info(f"Error reading table {tbl}: {e}")
 
 	except Exception as e:
-		logging.info(f"Fehler beim Öffnen/Lesen von {db_path}: {e}")
+		logging.info(f"Error opening/reading {db_path}: {e}")
 		return
 	finally:
 		try:
@@ -149,7 +149,7 @@ def export_per_project_crashes():
 		except Exception:
 			pass
 
-	# Pro Projekt eine Datei schreiben
+	# Write one file per project
 	total_entries = 0
 	for project, entries in project_entries.items():
 		safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", project)
@@ -163,14 +163,14 @@ def export_per_project_crashes():
 				json.dump(entries, f, indent=2, ensure_ascii=False)
 			total_entries += len(entries)
 		except Exception as e:
-			logging.info(f"Fehler beim Schreiben von {path}: {e}")
+			logging.info(f"Error writing {path}: {e}")
 
-	logging.info(f"Export abgeschlossen: {len(project_entries)} Projekte, {total_entries} Einträge.")
+	logging.info(f"Export completed: {len(project_entries)} projects, {total_entries} entries.")
 
 def _parse_location_from_stacktrace(stacktrace: str):
     """
-    Liefert ein dict mit {file, line, column, function} oder None,
-    wobei bevorzugt der erste Frame aus Projektcode genommen wird.
+    Returns a dict with {file, line, column, function} or None,
+    where the first frame from project code is preferred.
     """
     if not stacktrace:
         return None
@@ -201,22 +201,22 @@ def _parse_location_from_stacktrace(stacktrace: str):
         p = entry["file"]
         if any(x in p for x in _EXCLUDE_SUBSTRINGS):
             return False
-        # Bevorzuge typische Projektpfade (z.B. /src/ oder /home/…/code/)
+        # Prefer typical project paths (e.g. /src/ or /home/…/code/)
         return ("/src/" in p) or ("/home/" in p) or ("/work/" in p)
 
-    # 1) erster "Projekt"-Frame
+    # 1) first "project" frame
     for c in candidates:
         if is_project(c):
             return c
-    # 2) sonst der allererste erkannte Frame
+    # 2) otherwise the very first recognized frame
     return candidates[0]
 
 def _inject_location(rep):
     """
-    Fügt rep['location'] hinzu (oder None), basierend auf rep['stacktrace'].
+    Adds rep['location'] (or None), based on rep['stacktrace'].
     """
     try:
-        # Falls schon vorhanden, nicht erneut parsen
+        # If already present, do not parse again
         if rep.get("location") is not None:
             return rep
 
@@ -226,15 +226,15 @@ def _inject_location(rep):
         rep["location"] = loc  # dict oder None
         return rep
     except Exception:
-        # Im Fehlerfall lieber None setzen statt zu crashen
+        # In case of error, set None instead of crashing
         rep["location"] = None
         return rep
 
 def extract_vuln_location():
     """
-    Läuft über alle JSONs unter data/arvo-projects, extrahiert aus 'crash_output' die
-    wahrscheinlichste Code-Location und speichert sie als 'location' im Eintrag.
-    Nutzt Parallelisierung für Speed.
+    Iterates over all JSONs under data/arvo-projects, extracts from 'crash_output' the
+    most likely code location and stores it as 'location' in the entry.
+    Uses parallelization for speed.
     """
     cwd = os.getcwd()
     vulns_dir = os.path.join(cwd, "data", "arvo-projects")

@@ -63,9 +63,9 @@ def prepare_directories():
     for directory in directories:
         if not os.path.exists(directory):
             os.makedirs(directory)
-            logging.info(f"Verzeichnis erstellt: {directory}")
+            logging.info(f"Directory created: {directory}")
         else:
-            logging.info(f"Verzeichnis existiert bereits: {directory}")
+            logging.info(f"Directory already exists: {directory}")
 
 def get_oss_repo():
     """
@@ -81,10 +81,10 @@ def get_oss_repo():
     oss_repo_path = os.path.join(os.getcwd(), "repositories", "OSS-Repo")
     
     if len(os.listdir(oss_repo_path)) > 0:
-        logging.info("OSS-Fuzz Repository existiert bereits, überspringe Klonen...")
+        logging.info("OSS-Fuzz Repository already exists, skipping cloning...")
         return
     
-    logging.info("Klonen des OSS-Fuzz Repositories...")
+    logging.info("Cloning the OSS-Fuzz Repository...")
     cmd = ["git", "clone", "https://github.com/google/oss-fuzz", oss_repo_path]
     subprocess.run(cmd, check=True)
        
@@ -104,7 +104,7 @@ def get_oss_fuzz_vulns():
     if len(os.listdir(oss_vulns_repo_path)) > 0:
         return
     
-    logging.info("Klonen des OSS-Fuzz-Vulns Repositories...")
+    logging.info("Cloning the OSS-Fuzz-Vulns Repository...")
     cmd = ["git", "clone", "https://github.com/google/oss-fuzz-vulns.git", oss_vulns_repo_path]
     subprocess.run(cmd, check=True)
 
@@ -122,10 +122,10 @@ def get_arvo_meta():
     arvo_meta_path = os.path.join(os.getcwd(), "repositories","ARVO-Meta")
     
     if os.path.exists(arvo_meta_path) and os.listdir(arvo_meta_path):
-        logging.info("ARVO-Meta Repository existiert bereits, überspringe Klonen...")
+        logging.info("ARVO-Meta Repository already exists, skipping cloning...")
         return
     
-    logging.info("Klonen des ARVO-Meta Repositories...")
+    logging.info("Cloning the ARVO-Meta Repository...")
     cmd = ["git", "clone", "https://github.com/n132/ARVO-Meta.git", "--depth=1", arvo_meta_path]
     subprocess.run(cmd, check=True)
 
@@ -147,18 +147,18 @@ def get_arvo_table():
 
     # Skip if file already exists and is non-empty
     if os.path.exists(target_path) and os.path.getsize(target_path) > 0:
-        logging.info("arvo.db existiert bereits, überspringe Download…")
+        logging.info("arvo.db already exists, skipping download…")
         return
 
     try:
-        logging.info("Lade arvo.db herunter…")
+        logging.info("Downloading arvo.db…")
         subprocess.run(["wget", "-q", url, "-O", target_path], check=True)
         # Basic validation
         if not os.path.exists(target_path) or os.path.getsize(target_path) == 0:
-            raise RuntimeError("Heruntergeladene arvo.db ist leer oder fehlt.")
-        logging.info(f"arvo.db erfolgreich nach {target_path} heruntergeladen.")
+            raise RuntimeError("Downloaded arvo.db is empty or missing.")
+        logging.info(f"arvo.db successfully downloaded to {target_path}.")
     except subprocess.CalledProcessError as cpe:
-        logging.info(f"Fehler beim Herunterladen von arvo.db: returncode={cpe.returncode}")
+        logging.info(f"Error downloading arvo.db: returncode={cpe.returncode}")
         # Cleanup incomplete file if present
         try:
             if os.path.exists(target_path) and os.path.getsize(target_path) == 0:
@@ -166,7 +166,7 @@ def get_arvo_table():
         except Exception:
             pass
     except Exception as e:
-        logging.info(f"Unerwarteter Fehler beim Herunterladen von arvo.db: {e}")
+        logging.info(f"Unexpected error downloading arvo.db: {e}")
 
 def filter_oss_projects() -> list[(str, str)]:
     """
@@ -206,7 +206,7 @@ def filter_oss_projects() -> list[(str, str)]:
             json.dump(filtered, f, indent=2, ensure_ascii=False)
         logging.info(f"{len(filtered)} entries written to {out_path}")
     except Exception as e:
-        logging.info(f"Fehler beim Schreiben von {out_path}: {e}")
+        logging.info(f"Error writing {out_path}: {e}")
 
     return filtered
 
@@ -240,12 +240,12 @@ def get_oss_projects(project_tuple):
             all_commits_exist = False
             missing_commits.append(commit)
     if all_commits_exist:
-        logging.info(f"Projekt {project_name} mit allen {len(commits)} Commits existiert bereits, überspringe Klonen...")
+        logging.info(f"Project {project_name} with all {len(commits)} commits already exists, skipping cloning...")
         return
 
     for commit in missing_commits:
         commit_dir = os.path.join(oss_projects_path, f"{project_name}_{commit}")
-        logging.info(f"Klone {project_name} für Commit {commit}...")
+        logging.info(f"Clone {project_name} for commit {commit}...")
         try:
             # Clone and checkout specific commit, capturing output
             # subprocess.run(["git", "clone", "--recursive", project_url, commit_dir], check=True, capture_output=True, text=True)
@@ -277,7 +277,7 @@ def get_oss_projects(project_tuple):
                 lf.write(f"stderr:\n{cpe.stderr}\n")
                 lf.write(f"Traceback:\n{tb}\n")
             shutil.rmtree(commit_dir, ignore_errors=True)
-            logging.info(f"Unvollständiger Ordner {commit_dir} wurde gelöscht.")
+            logging.info(f"Incomplete folder {commit_dir} was deleted.")
         except Exception as e:
             error_log = os.path.join(cloning_errors_dir, f"{project_name}_{commit}.log")
             tb = traceback.format_exc()
@@ -285,7 +285,7 @@ def get_oss_projects(project_tuple):
                 lf.write(f"[EXCEPTION] {project_name}:{commit}: {e}\n")
                 lf.write(f"Traceback:\n{tb}\n")
             shutil.rmtree(commit_dir, ignore_errors=True)
-            logging.info(f"Unvollständiger Ordner {commit_dir} wurde gelöscht.")
+            logging.info(f"Incomplete folder {commit_dir} was deleted.")
          
 def get_vulnerable_projects_with_commits():
     """
@@ -315,10 +315,10 @@ def get_vulnerable_projects_with_commits():
                 # expected format: [ [projectName, projectUrl], ... ]
                 vulnerable_projects = [tuple(item) for item in json.load(vf)]
         except Exception as e:
-            logging.info(f"Fehler beim Laden von vulnerable_oss_projects.json: {e}")
+            logging.info(f"Error loading vulnerable_oss_projects.json: {e}")
             vulnerable_projects = []
     else:
-        logging.info(f"Vulnerable OSS Projects JSON nicht gefunden: {vuln_projects_json}")
+        logging.info(f"Vulnerable OSS Projects JSON not found: {vuln_projects_json}")
 
     # 1) Load zero_commits.json and convert to Dict
     zero_mapping = {}
@@ -326,13 +326,13 @@ def get_vulnerable_projects_with_commits():
         try:
             with open(zero_commits_path, "r", encoding="utf-8") as zf:
                 zero_list = json.load(zf)
-            # erwartet: [ [projectUrl, commitHash], [...] ]
+            # expected: [ [projectUrl, commitHash], [...] ]
             for entry in zero_list:
                 if len(entry) >= 2:
                     url, commit_hash = entry[0], entry[1]
                     zero_mapping[url] = commit_hash
         except Exception as e:
-            logging.info(f"Fehler beim Laden von zero_commits.json: {e}")
+            logging.info(f"Error loading zero_commits.json: {e}")
 
     # 2) Collect commits for each vulnerable project
     total_projects = 0
@@ -350,32 +350,32 @@ def get_vulnerable_projects_with_commits():
                 for vuln in vulns_data:
                     ic = vuln.get("introduced_commit", None)
                     if not ic:
-                        # kein Eintrag → skip
+                        # no entry → skip
                         continue
                     if ic != "0":
-                        # normaler Hash
+                        # normal hash
                         if ic not in commits:
                             commits.append(ic)
                     else:
-                        # special case "0" → Mapping versuchen
+                        # special case "0" → try mapping
                         replacement = zero_mapping.get(project_url)
                         if replacement:
                             if replacement not in commits:
                                 commits.append(replacement)
-                                logging.info(f"Ersetze Commit '0' durch '{replacement}' für {project_name}")
+                                logging.info(f"Replace commit '0' with '{replacement}' for {project_name}")
                         else:
-                            logging.info(f"Kein Ersatz-Commit für '0' gefunden in zero_commits.json für {project_url}")
-                # Nur Projekte mit mind. einem Commit behalten
+                            logging.info(f"No replacement commit for '0' found in zero_commits.json for {project_url}")
+                # Keep only projects with at least one commit
                 if commits:
                     kept_projects += 1
                     vulnerable_projects_with_commits.append((project_name, project_url, *commits))
             except Exception as e:
-                logging.info(f"Fehler beim Laden der Vulnerabilities für {project_name}: {e}")
-                # keine Aufnahme, wenn Commits nicht gelesen werden konnten
+                logging.info(f"Error loading vulnerabilities for {project_name}: {e}")
+                # no inclusion if commits could not be read
         else:
-            # keine JSON-Datei vorhanden
-            logging.info(f"Vulnerabilities-Datei nicht gefunden: {json_path}")
-            # keine Aufnahme, wenn keine Daten vorhanden sind
+            # no JSON file present
+            logging.info(f"Vulnerabilities file not found: {json_path}")
+            # no inclusion if no data is available
 
     # Ergebnis als JSON persistieren (Liste von Listen statt Tuples)
     try:
@@ -383,10 +383,10 @@ def get_vulnerable_projects_with_commits():
         with open(out_path, "w", encoding="utf-8") as out_f:
             json.dump(serializable, out_f, indent=2, ensure_ascii=False)
         logging.info(
-            f"{kept_projects}/{total_projects} Projekte mit Commits nach {out_path} geschrieben."
+            f"{kept_projects}/{total_projects} projects with commits written to {out_path}."
         )
     except Exception as e:
-        logging.info(f"Fehler beim Schreiben von {out_path}: {e}")
+        logging.info(f"Error writing {out_path}: {e}")
 
     return vulnerable_projects_with_commits
 
@@ -422,16 +422,16 @@ def get_clang_dependencies():
 
     def download_and_extract(url, archive_name, target_dir, tar_opts):
         if os.path.exists(target_dir):
-            logging.info(f"{target_dir} existiert bereits, überspringe Download und Entpacken.")
+            logging.info(f"{target_dir} already exists, skipping download and extraction.")
             return
-        logging.info(f"Lade herunter: {url}")
+        logging.info(f"Downloading: {url}")
         subprocess.run(["wget", "-q", url, "-O", archive_name], check=True)
-        logging.info(f"Entpacke {archive_name} nach {current_dir}...")
+        logging.info(f"Extracting {archive_name} to {current_dir}...")
         subprocess.run(["tar", tar_opts, archive_name], check=True)
         try:
             os.remove(os.path.join(current_dir, archive_name))
         except Exception as e:
-            logging.info(f"Fehler beim Löschen des Archivs {archive_name}: {e}")
+            logging.info(f"Error deleting archive {archive_name}: {e}")
 
     # Binärpaket (.tar.xz)
     download_and_extract(
@@ -458,7 +458,7 @@ def get_project_includes():
     """
     Extracts include files from all OSS projects and saves them in data/includes.
     """
-    logging.info("Erzeuge Include-Listen für OSS-Projects...")
+    logging.info("Generate include lists for OSS-Projects...")
     cwd = os.getcwd()
     includes_path = os.path.join(cwd, "data", "includes")
     oss_projects_path = os.path.join(cwd, "repositories")
@@ -470,7 +470,7 @@ def get_project_includes():
         # Skip if includes JSON already exists
         output_file = os.path.join(includes_path, f"{entry}.json")
         if os.path.exists(output_file):
-            logging.info(f"Includes für Projekt {entry} existieren bereits, überspringe.")
+            logging.info(f"Includes for project {entry} already exist, skipping.")
             continue
         includes = []
         for root, dirs, files in os.walk(project_dir):
@@ -483,18 +483,18 @@ def get_project_includes():
         try:
             with open(output_file, 'w', encoding='utf-8') as out_f:
                 json.dump(includes, out_f, indent=2, ensure_ascii=False)
-            logging.info(f"Includes für Projekt {entry} in {output_file} geschrieben.")
+            logging.info(f"Includes for project {entry} written to {output_file}.")
         except Exception as e:
-            logging.info(f"Fehler beim Schreiben der Include-Datei für {entry}: {e}")
+            logging.info(f"Error writing include file for {entry}: {e}")
 
 def get_general_includes():
     """
     Extracts general include files from clang installation and saves them in data/includes/general.json.
     """
-    logging.info("Erzeuge allgemeine Include-Liste für LLVM Clang...")
+    logging.info("Generate general include list for LLVM Clang...")
     cwd = os.getcwd()
     includes_path = os.path.join(cwd, "data", "includes")
-    # Pfad zum Clang Include-Verzeichnis
+    # Path to Clang include directory
     clang_include_dir = os.path.join(cwd, "LLVM-20.1.8-Linux-X64", "lib", "clang", "20", "include")
     general_includes = []
     for root, dirs, files in os.walk(clang_include_dir):
@@ -506,6 +506,6 @@ def get_general_includes():
     try:
         with open(output_file, 'w', encoding='utf-8') as out_f:
             json.dump(general_includes, out_f, indent=2, ensure_ascii=False)
-        logging.info(f"Allgemeine Includes in {output_file} geschrieben.")
+        logging.info(f"General includes written to {output_file}.")
     except Exception as e:
-        logging.info(f"Fehler beim Schreiben der allgemeinen Include-Datei: {e}")
+        logging.info(f"Error writing general include file: {e}")

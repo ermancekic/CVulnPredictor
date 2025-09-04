@@ -1,14 +1,13 @@
 """Utility to iterate all arvo-project JSON files, run their docker images, copy source & includes.
 
-Für jedes JSON (Dateiname <projektname>.json) in data/arvo-projects werden alle localID Werte
-gesammelt. Für jede localID wird das Docker Image "cr.cispa.de/d/n132/arvo:<localID>-vul" verarbeitet:
+For each JSON file (filename <projectname>.json) in data/arvo-projects, all localID values are collected. For each localID, the Docker image "cr.cispa.de/d/n132/arvo:<localID>-vul" is processed:
 
-1. Zielordner repositories/<projektname>_<localID> wird erstellt.
-2. Image wird (falls nötig) gepullt und ein Container erzeugt.
-3. Im Container wird 'arvo compile' ausgeführt.
-4. Aus dem Container werden die Pfade /src/<projektname>, /usr/include und /work in den Zielordner kopiert.
-5. Container wird gestoppt/entfernt und Image wieder gelöscht (konfigurierbar).
-6. Idempotenz: Wenn bereits vollständig extrahiert wurde, wird das Paar übersprungen.
+1. Target folder repositories/<projectname>_<localID> is created.
+2. Image is pulled (if necessary) and a container is created.
+3. 'arvo compile' is executed in the container.
+4. The paths /src/<projectname>, /usr/include, and /work are copied from the container to the target folder.
+5. Container is stopped/removed and the image is deleted again (configurable).
+6. Idempotency: If already fully extracted, the pair is skipped.
 """
 
 from __future__ import annotations
@@ -47,10 +46,10 @@ def _collect_local_ids(json_path: Path) -> Set[int]:
         try:
             data = _json_load(f)
         except Exception as e:  # pragma: no cover
-            LOG.error("Fehler beim Lesen %s: %s", json_path.name, e)
+            LOG.error("Error reading %s: %s", json_path.name, e)
             return set()
     if not isinstance(data, list):  # pragma: no cover
-        LOG.warning("Unerwartetes JSON Format in %s (erwarte Liste)", json_path.name)
+        LOG.warning("Unexpected JSON format in %s (expected list)", json_path.name)
         return set()
     ids: Set[int] = set()
     for item in data:
@@ -58,7 +57,7 @@ def _collect_local_ids(json_path: Path) -> Set[int]:
             try:
                 ids.add(int(item["localID"]))
             except (TypeError, ValueError):  # pragma: no cover
-                LOG.debug("Überspringe ungültige localID in %s: %r", json_path.name, item.get("localID"))
+                LOG.debug("Skipping invalid localID in %s: %r", json_path.name, item.get("localID"))
     return ids
 
 
@@ -91,7 +90,7 @@ def _dir_nonempty(p: Path) -> bool:
 
 
 def _already_extracted(dest_dir: Path, project: str, require_both: bool = True) -> bool:
-    """Bestimme, ob wir dieses Paar überspringen können."""
+    """Determine if we can skip this pair."""
     marker = _read_marker(dest_dir)
     expected_src = dest_dir / project
     expected_inc = dest_dir / "include"
@@ -101,11 +100,11 @@ def _already_extracted(dest_dir: Path, project: str, require_both: bool = True) 
     inc_ok = _dir_nonempty(expected_inc)
     work_ok = _dir_nonempty(expected_work)
 
-    # Wenn Marker "completed" ist, vertrauen wir ihm (schnellster Check)
+    # If marker is "completed", we trust it (fastest check)
     if marker and marker.get("completed") is True:
         return True
 
-    # Fallback: Wenn alle (oder mind. einer) Pfade vorhanden sind
+    # Fallback: If all (or at least one) paths are present
     if require_both:
         return src_ok and inc_ok and work_ok
     return src_ok or inc_ok or work_ok
@@ -122,20 +121,20 @@ def _image_id(image_tag: str) -> Optional[str]:
 
 def _copy_if_missing(container_id: str, src_in_container: str, dest_dir: Path) -> Tuple[str, bool, Optional[str]]:
     """
-    Kopiere Verzeichnis aus Container, falls im Ziel noch nicht vorhanden oder leer.
-    Gibt (name_im_ziel, copied_bool, error_msg_or_None) zurück.
+    Copy directory from container if not present or empty in target.
+    Returns (name_in_target, copied_bool, error_msg_or_None).
     """
-    name = Path(src_in_container).name  # z.B. "<project>", "include" oder "work"
+    name = Path(src_in_container).name  # e.g. "<project>", "include" or "work"
     target = dest_dir / name
     if _dir_nonempty(target):
-        LOG.debug("Ziel bereits vorhanden, überspringe Copy: %s", target)
+        LOG.debug("Target already exists, skipping copy: %s", target)
         return name, False, None
     try:
         _run(["docker", "cp", f"{container_id}:{src_in_container}", str(dest_dir)])
-        LOG.debug("Kopiert %s -> %s", src_in_container, dest_dir)
+        LOG.debug("Copied %s -> %s", src_in_container, dest_dir)
         return name, True, None
     except subprocess.CalledProcessError as e:
-        LOG.warning("Pfad fehlt im Image/Container: %s (%s)", src_in_container, e)
+        LOG.warning("Path missing in image/container: %s (%s)", src_in_container, e)
         return name, False, str(e)
 
 
@@ -149,20 +148,20 @@ def _process_one(
     remove_image: bool,
 ) -> Tuple[str, int, bool, str]:
     """
-    Verarbeite ein (project, local_id) Paar.
-    Rückgabe: (project, local_id, success, message)
+    Process a (project, local_id) pair.
+    Returns: (project, local_id, success, message)
     """
     image_tag = f"cr.cispa.de/d/n132/arvo:{local_id}-vul"
     dest_dir = repositories_dir / f"{project}_{local_id}"
     dest_dir.mkdir(parents=True, exist_ok=True)
 
     if skip_existing and _already_extracted(dest_dir, project, require_both=True):
-        msg = f"Übersprungen (bereits extrahiert): {image_tag}"
+        msg = f"Skipped (already extracted): {image_tag}"
         LOG.info(msg)
         return project, local_id, True, msg
 
     if dry_run:
-        msg = f"DRY-RUN: Würde verarbeiten {image_tag} -> {dest_dir} (inkl. 'arvo compile' & /work)"
+        msg = f"DRY-RUN: Would process {image_tag} -> {dest_dir} (incl. 'arvo compile' & /work)"
         LOG.info(msg)
         return project, local_id, True, msg
 
@@ -170,7 +169,7 @@ def _process_one(
     try:
         _run(["docker", "pull", image_tag])
     except subprocess.CalledProcessError as e:
-        msg = f"Pull fehlgeschlagen ({image_tag}): {e}"
+        msg = f"Pull failed ({image_tag}): {e}"
         LOG.error(msg)
         return project, local_id, False, msg
 
@@ -182,24 +181,24 @@ def _process_one(
         create_cp = _run(["docker", "create", image_tag], capture_output=True)
         container_id = create_cp.stdout.strip()
         if not container_id:
-            msg = f"Konnte Container nicht erstellen für {image_tag}"
+            msg = f"Could not create container for {image_tag}"
             LOG.error(msg)
             return project, local_id, False, msg
 
         # Container starten und 'arvo compile' ausführen
         try:
             _run(["docker", "start", container_id])
-            # exakt wie gefordert: "arvo compile"
-            # via Login-Shell (-lc), damit ENV/Path korrekt sind
+            # exactly as requested: "arvo compile"
+            # via login shell (-lc) to ensure ENV/Path are correct
             _run(["docker", "exec", container_id, "bash", "-lc", "arvo compile"])
-            LOG.info("%s: 'arvo compile' erfolgreich ausgeführt", image_tag)
+            LOG.info("%s: 'arvo compile' executed successfully", image_tag)
         except subprocess.CalledProcessError as e:
-            err = f"'arvo compile' fehlgeschlagen: {e}"
+            err = f"'arvo compile' failed: {e}"
             LOG.warning("%s: %s", image_tag, err)
             errors.append(err)
-            # Weiterkopieren versuchen – ggf. existiert /work trotzdem
+            # Try to continue copying – /work might still exist
 
-        # Ziele kopieren (nur fehlende)
+        # Copy targets (only missing)
         src_paths = [f"/src/{project}", "/usr/include", "/work"]
         for sp in src_paths:
             name, copied, err = _copy_if_missing(container_id, sp, dest_dir)
@@ -207,7 +206,7 @@ def _process_one(
             if err:
                 errors.append(f"{sp}: {err}")
 
-        # Marker schreiben (completed nur, wenn alle drei Ziele vorhanden)
+        # Write marker (completed only if all three targets are present)
         payload = {
             "image_tag": image_tag,
             "image_id": _image_id(image_tag),
@@ -224,30 +223,30 @@ def _process_one(
         _write_marker(dest_dir, payload)
 
         if errors and not payload["completed"]:
-            msg = f"Teilweise kopiert/kompiliert, fehlend/Fehler: {', '.join(errors)}"
+            msg = f"Partially copied/compiled, missing/errors: {', '.join(errors)}"
             LOG.warning(msg)
             return project, local_id, False, msg
 
-        msg = "Kopiert (nichts zu tun)" if not copied_any else "Kopiert (neu/ergänzt)"
+        msg = "Copied (nothing to do)" if not copied_any else "Copied (new/supplemented)"
         LOG.info("%s: %s", image_tag, msg)
         return project, local_id, True, msg
 
     finally:
         if container_id:
-            # sauber stoppen, dann entfernen
+            # cleanly stop, then remove
             try:
                 _run(["docker", "stop", container_id], check=False)
             except subprocess.CalledProcessError:
-                LOG.debug("Container Stop fehlgeschlagen: %s", container_id)
+                LOG.debug("Container stop failed: %s", container_id)
             try:
                 _run(["docker", "rm", container_id])
             except subprocess.CalledProcessError:
-                LOG.debug("Container Remove fehlgeschlagen: %s", container_id)
+                LOG.debug("Container remove failed: %s", container_id)
         if remove_image:
             try:
                 _run(["docker", "rmi", "-f", image_tag])
             except subprocess.CalledProcessError:
-                LOG.debug("Image Entfernen fehlgeschlagen: %s", image_tag)
+                LOG.debug("Image remove failed: %s", image_tag)
 
 
 def process_arvo_projects(
@@ -260,27 +259,27 @@ def process_arvo_projects(
     skip_existing: bool = True,
     remove_image: bool = True,
 ) -> Dict[str, List[int]]:
-    """Verarbeite alle Projekte parallel.
+    """Process all projects in parallel.
 
     Args:
-        arvo_dir: Verzeichnis mit <projekt>.json Dateien.
-        repositories_dir: Basis-Ausgabeordner.
-        dry_run: Nur anzeigen, nichts ausführen.
-        stop_after: Optional Anzahl der (projekt,localID) Paare begrenzen (Debug / Test).
-        workers: Anzahl paralleler Threads (IO-bound; Default basiert auf CPU).
-        skip_existing: Bereits vollständig extrahierte Paare überspringen.
-        remove_image: Nach Verarbeitung 'docker rmi -f' für das jeweilige Image ausführen.
+        arvo_dir: Directory with <project>.json files.
+        repositories_dir: Base output directory.
+        dry_run: Only display, do not execute.
+        stop_after: Optionally limit the number of (project,localID) pairs (Debug / Test).
+        workers: Number of parallel threads (IO-bound; Default based on CPU).
+        skip_existing: Skip already fully extracted pairs.
+        remove_image: After processing, run 'docker rmi -f' for the respective image.
 
     Returns:
-        Mapping projektname -> Liste erfolgreich verarbeiteter localIDs.
+        Mapping projectname -> List of successfully processed localIDs.
     """
     processed: Dict[str, List[int]] = {}
     if not arvo_dir.is_dir():  # pragma: no cover
-        raise FileNotFoundError(f"arvo_dir existiert nicht: {arvo_dir}")
+        raise FileNotFoundError(f"arvo_dir does not exist: {arvo_dir}")
     repositories_dir.mkdir(parents=True, exist_ok=True)
 
     json_files = sorted(p for p in arvo_dir.glob("*.json") if p.is_file())
-    LOG.info("Gefundene Projekt JSONs: %d", len(json_files))
+    LOG.info("Found project JSONs: %d", len(json_files))
 
     # Aufgabenliste erstellen
     tasks: List[Tuple[str, int]] = []
@@ -288,23 +287,23 @@ def process_arvo_projects(
         project = json_file.stem
         local_ids = _collect_local_ids(json_file)
         if not local_ids:
-            LOG.debug("Keine localIDs in %s", json_file.name)
+            LOG.debug("No localIDs in %s", json_file.name)
             continue
-        LOG.info("Projekt %s: %d localIDs", project, len(local_ids))
+        LOG.info("Project %s: %d localIDs", project, len(local_ids))
         for local_id in sorted(local_ids):
             tasks.append((project, local_id))
 
     if stop_after is not None:
         tasks = tasks[:stop_after]
-        LOG.info("Stop-After aktiviert: Verarbeite nur %d Paare", len(tasks))
+        LOG.info("Stop-After activated: Processing only %d pairs", len(tasks))
 
-    # Parallel verarbeiten
+    # Process in parallel
     futures = []
     processed = {proj: [] for proj in {t[0] for t in tasks}}
     if not tasks:
         return processed
 
-    LOG.info("Starte parallele Verarbeitung mit %d Worker-Threads ...", workers)
+    LOG.info("Starting parallel processing with %d worker threads ...", workers)
     with ThreadPoolExecutor(max_workers=max(1, int(workers))) as ex:
         for project, local_id in tasks:
             futures.append(
@@ -324,9 +323,9 @@ def process_arvo_projects(
                 project, local_id, ok, msg = fut.result()
                 if ok:
                     processed.setdefault(project, []).append(local_id)
-                LOG.debug("Ergebnis %s_%s: %s", project, local_id, msg)
+                LOG.debug("Result %s_%s: %s", project, local_id, msg)
             except Exception as e:
-                LOG.exception("Unerwarteter Fehler bei Task: %s", e)
+                LOG.exception("Unexpected error in task: %s", e)
 
     return processed
 
@@ -341,16 +340,16 @@ def _configure_logging(verbose: bool) -> None:
 
 def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Extrahiere Quellen & Includes aus n132/arvo Images (parallel & idempotent, inkl. 'arvo compile' & /work)"
+        description="Extract sources & includes from n132/arvo images (parallel & idempotent, incl. 'arvo compile' & /work)"
     )
-    parser.add_argument("--arvo-dir", type=Path, default=Path("data/arvo-projects"), help="Pfad zu arvo-project JSONs")
-    parser.add_argument("--repositories", type=Path, default=Path("repositories"), help="Zielbasisordner")
-    parser.add_argument("--dry-run", action="store_true", help="Nur anzeigen, nichts ausführen")
-    parser.add_argument("--stop-after", type=int, help="Begrenze Anzahl verarbeiteter Paare")
-    parser.add_argument("--workers", type=int, default=DEFAULT_MAX_WORKERS, help="Anzahl paralleler Worker (Threads)")
-    parser.add_argument("--no-skip-existing", dest="skip_existing", action="store_false", help="NICHT überspringen, auch wenn bereits extrahiert")
-    parser.add_argument("--keep-images", dest="remove_image", action="store_false", help="Docker Images nach Verarbeitung behalten")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose Logging")
+    parser.add_argument("--arvo-dir", type=Path, default=Path("data/arvo-projects"), help="Path to arvo-project JSONs")
+    parser.add_argument("--repositories", type=Path, default=Path("repositories"), help="Target base directory")
+    parser.add_argument("--dry-run", action="store_true", help="Only display, do nothing")
+    parser.add_argument("--stop-after", type=int, help="Limit number of processed pairs")
+    parser.add_argument("--workers", type=int, default=DEFAULT_MAX_WORKERS, help="Number of parallel workers (threads)")
+    parser.add_argument("--no-skip-existing", dest="skip_existing", action="store_false", help="DO NOT skip, even if already extracted")
+    parser.add_argument("--keep-images", dest="remove_image", action="store_false", help="Keep Docker images after processing")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose logging")
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     _configure_logging(args.verbose)
@@ -369,7 +368,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         return 2
 
     total = sum(len(v) for v in summary.values())
-    LOG.info("Fertig. %d Projekte, %d (projekt,localID) Paare erfolgreich.", len(summary), total)
+    LOG.info("Done. %d projects, %d (project,localID) pairs successful.", len(summary), total)
     return 0
 
 

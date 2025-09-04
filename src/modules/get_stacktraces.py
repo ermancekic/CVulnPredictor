@@ -19,7 +19,7 @@ _FRAME_RE = re.compile(
     r"#\d+\s+0x[0-9a-fA-F]+\s+in\s+(?P<func>.+?)\s+(?P<file>\/[^:\s]+):(?P<line>\d+)(?::(?P<col>\d+))?"
 )
 
-# Framework-/Runtime-Pfade, die wir NICHT als Projektcode werten
+# Framework/Runtime paths that we do NOT consider as project code
 _EXCLUDE_SUBSTRINGS = (
     "/llvm-project/",
     "/aflpp/",
@@ -93,8 +93,8 @@ def get_stacktraces_from_docker(skip_existing=False):
 
 def _parse_location_from_stacktrace(stacktrace: str):
     """
-    Liefert ein dict mit {file, line, column, function} oder None,
-    wobei bevorzugt der erste Frame aus Projektcode genommen wird.
+    Returns a dict with {file, line, column, function} or None,
+    preferring the first frame from project code.
     """
     if not stacktrace:
         return None
@@ -125,22 +125,22 @@ def _parse_location_from_stacktrace(stacktrace: str):
         p = entry["file"]
         if any(x in p for x in _EXCLUDE_SUBSTRINGS):
             return False
-        # Bevorzuge typische Projektpfade (z.B. /src/ oder /home/…/code/)
+        # Prefer typical project paths (e.g. /src/ or /home/…/code/)
         return ("/src/" in p) or ("/home/" in p) or ("/work/" in p)
 
-    # 1) erster "Projekt"-Frame
+    # 1) first "project" frame
     for c in candidates:
         if is_project(c):
             return c
-    # 2) sonst der allererste erkannte Frame
+    # 2) otherwise the very first recognized frame
     return candidates[0]
 
 def _inject_location(rep):
     """
-    Fügt rep['location'] hinzu (oder None), basierend auf rep['stacktrace'].
+    Adds rep['location'] (or None), based on rep['stacktrace'].
     """
     try:
-        # Falls schon vorhanden, nicht erneut parsen (optional – kannst du rausnehmen, wenn du immer überschreiben willst)
+        # If already present, do not parse again
         if rep.get("location") is not None:
             return rep
 
@@ -148,7 +148,7 @@ def _inject_location(rep):
         rep["location"] = loc  # dict oder None
         return rep
     except Exception as e:
-        # Im Fehlerfall lieber None setzen statt zu crashen
+        # In case of error, better to set None instead of crashing
         rep["location"] = None
         rep["location_error"] = f"{type(e).__name__}: {e}"
         return rep
@@ -156,9 +156,9 @@ def _inject_location(rep):
 
 def extract_vuln_location():
     """
-    Läuft über alle JSONs unter data/vulns, extrahiert aus 'stacktrace' die
-    wahrscheinlichste Code-Location und speichert sie als 'location' im Eintrag.
-    Nutzt Parallelisierung für Speed.
+    Iterates over all JSONs under data/vulns, extracts from 'stacktrace' the
+    most likely code location and stores it as 'location' in the entry.
+    Uses parallelization for speed.
     """
     cwd = os.getcwd()
     vulns_dir = os.path.join(cwd, "data", "vulns")
@@ -195,11 +195,11 @@ def extract_vuln_location():
 
 def get_stacktraces_from_table():
     """
-    Gehe über alle JSON-Dateien in data/vulns und für jeden Eintrag mit
-    'new-oss-id' suche in der lokalen SQLite-Datenbank 'arvo.db' nach einem
-    Eintrag mit 'localId' == new-oss-id. Falls gefunden, hole das Feld
-    'report' aus der DB und speichere es als 'stacktrace' im JSON-Eintrag.
-    Schreibe die JSON-Dateien mit den aktualisierten Einträgen zurück.
+    Go over all JSON files in data/vulns and for each entry with
+    'new-oss-id' search in the local SQLite database 'arvo.db' for an
+    entry with 'localId' == new-oss-id. If found, get the field
+    'report' from the DB and store it as 'stacktrace' in the JSON entry.
+    Write the JSON files with the updated entries back.
     """
     cwd = os.getcwd()
     vulns_dir = os.path.join(cwd, "data", "vulns")
@@ -210,7 +210,7 @@ def get_stacktraces_from_table():
     if not os.path.isfile(db_path):
         raise FileNotFoundError(f"Database not found: {db_path}")
 
-    # Öffne DB einmal und finde Tabellen, die sowohl localId als auch report haben
+    # Open DB once and find tables that have both localId and report
     conn = sqlite3.connect(db_path)
     try:
         cur = conn.cursor()
@@ -231,7 +231,7 @@ def get_stacktraces_from_table():
         if not tables_with_cols:
             logging.warning(f"No table with both 'localId' and 'crash_output' columns found in {db_path}")
 
-        # Für jede JSON-Datei: laden, updaten, speichern
+        # For each JSON file: load, update, save
         for fname in os.listdir(vulns_dir):
             if not fname.endswith('.json'):
                 continue
@@ -288,7 +288,7 @@ def get_stacktraces_from_table():
                     rep['stacktrace'] = None
                     rep['stacktrace_error'] = f"{type(e).__name__}: {e}"
 
-            # schreibe nur wenn verändert (oder wir wollen immer überschreiben)
+            # write only if changed (or if we want to always overwrite)
             try:
                 with open(file_path, 'w', encoding='utf-8') as f:
                     json.dump(reports, f, indent=2, ensure_ascii=False)
