@@ -70,39 +70,133 @@ def separate_and_filter_calculated_metrics(thresholds):
             except Exception as e:
                 logging.info(f"Fehler beim Schreiben von {out_path}: {e}")
 
+def _strip_templates(s: str) -> str:
+    """
+    Entfernt Template-Argumente, z.B.:
+      'Visit<arrow::Int8Type>'              -> 'Visit'
+      'Foo<Bar<Baz>, Qux>'                  -> 'Foo'
+    Arbeitet mit verschachtelten '<...>'.
+    """
+    out = []
+    depth = 0
+    for ch in s:
+        if ch == '<':
+            depth += 1
+        elif ch == '>':
+            if depth > 0:
+                depth -= 1
+        else:
+            if depth == 0:
+                out.append(ch)
+    return ''.join(out)
+
+def _base_func_name(sig: str) -> str:
+    """
+    Liefert den nackten Funktionsnamen ohne Namespace, Parameter, Qualifier und Template-Argumente.
+    Beispiele:
+      "pcpp::DnsLayer::parseResources()" -> "parseResources"
+      "arrow::Status arrow::VisitArrayInline<...>(...)" -> "VisitArrayInline"
+      "Visit<arrow::Int8Type>" -> "Visit"
+      "PutOffsets<int>" -> "PutOffsets"
+      "Bar::~Bar()" -> "~Bar"
+      "operator new[](unsigned long)" -> "operator new[]"
+      "operator<<(std::ostream&, int)" -> "operator<<"
+      "operator()" -> "operator()"
+    """
+    if not sig:
+        return ""
+
+    s = sig.strip()
+
+    # ---- Spezialfall: Operatoren (erhalten Symbole wie <<, [], (), new[])
+    op_idx = s.find('operator')
+    if op_idx != -1:
+        # ab 'operator' bis vor die Parameterklammer
+        op = s[op_idx:].split('(', 1)[0].strip()
+        # Namespaces vor operator entfernen (z.B. "A::B::operator<<")
+        if '::' in op:
+            op = op.rsplit('::', 1)[-1]
+        # Falls es explizit 'operator' ohne Symbol ist, trotzdem so zurückgeben
+        return op if op else 'operator'
+
+    # ---- Normale Funktionen
+    # Parameter/Trailing-Qualifier weg
+    idx = s.rfind('(')
+    if idx != -1:
+        s = s[:idx].strip()
+
+    # Template-Argumente robust entfernen (nach Operator-Check!)
+    s = _strip_templates(s)
+
+    # Whitespace normalisieren
+    s = ' '.join(s.split())
+
+    # letzten Namespace-Teil nehmen
+    if '::' in s:
+        s = s.rsplit('::', 1)[-1].strip()
+
+    # führende Spezifizierer (static, inline, virtual, Rückgabetyp etc.) entfernen
+    parts = s.split(' ')
+    name = parts[-1] if parts else s
+
+    return name
+
+def _normalize_loc_path(p: str) -> str:
+    """
+    Entfernt alles bis einschließlich der letzten '..'-Sequenz und normalisiert Slashes.
+    Beispiele:
+      '/a/b/../../src/x.h' -> 'src/x.h'
+      'a/../b/../c/d.h'    -> 'c/d.h'
+      'src/x.h'            -> 'src/x.h'
+    """
+    if not p:
+        return ""
+    # Einheitliche Slashes
+    p = p.replace('\\', '/')
+    # Komponenten ohne leere/`.`-Segmente
+    parts = [seg for seg in p.split('/') if seg not in ("", ".")]
+    # Index der letzten '..'
+    last_dd = -1
+    for i, seg in enumerate(parts):
+        if seg == "..":
+            last_dd = i
+    # Alles bis zur letzten '..' wegschneiden
+    if last_dd != -1:
+        parts = parts[last_dd + 1:]
+    # Wieder zusammenbauen
+    return "/".join(parts)
+
 def check_if_function_in_vulns():
     """
     Identify functions from single-metrics that match known vulnerabilities and write results.
-
-    Args:
-        None
-
-    Returns:
-        None
+    Pfadvergleich nutzt eine normalisierte Vulnerability-Datei (.. und davor abgeschnitten),
+    Funktionsvergleich nutzt nur den nackten Funktionsnamen (ohne Namespace).
     """
-    
     base = os.getcwd()
     metrics_dir = os.path.join(base, "data", "single-metrics")
     vulns_dir = os.path.join(base, "data", "arvo-projects")
     output_dir = os.path.join(base, "data", "found-methods")
     general_dir = os.path.join(base, "data", "general")
-    # ensure each metric folder exists in output
+
+    # ensure base output dirs exist
+    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(general_dir, exist_ok=True)
+
+    # ensure each metric folder exists in output and not-found
     metric_names = [m for m in os.listdir(metrics_dir) if os.path.isdir(os.path.join(metrics_dir, m))]
     for metric_name in metric_names:
-        metric_out = os.path.join(output_dir, metric_name)
-        os.makedirs(metric_out, exist_ok=True)
-    # ensure each metric folder exists in not-found-methods
+        os.makedirs(os.path.join(output_dir, metric_name), exist_ok=True)
+
     not_found_dir = os.path.join(base, "data", "not-found-methods")
     for metric_name in metric_names:
-        metric_nf_out = os.path.join(not_found_dir, metric_name)
-        os.makedirs(metric_nf_out, exist_ok=True)
+        os.makedirs(os.path.join(not_found_dir, metric_name), exist_ok=True)
 
-    # prepare per-metric counters and seen-sets to avoid double counting per project_localid
+    # per-metric counters and seen-sets
     metric_counters = {m: {"total_vulns": 0, "found_vulns": 0} for m in metric_names}
-    metric_seen_total = {m: set() for m in metric_names}   # keys: project_localid
-    metric_seen_found = {m: set() for m in metric_names}   # keys: project_localid
+    metric_seen_total = {m: set() for m in metric_names}
+    metric_seen_found = {m: set() for m in metric_names}
 
-    # iterate each project vulnerability file
+    # iterate vulnerability files
     for vuln_file in os.listdir(vulns_dir):
         if not vuln_file.endswith('.json'):
             continue
@@ -111,62 +205,77 @@ def check_if_function_in_vulns():
         try:
             with open(vuln_path, 'r', encoding='utf-8') as vf:
                 vuln_list = json.load(vf)
-        except Exception:
+        except Exception as e:
+            logging.info(f"Fehler beim Lesen von {vuln_path}: {e}")
             continue
-        # for each vulnerability entry
+
         for vuln in vuln_list:
             local_id = vuln.get('localID')
             loc = vuln.get('location', {})
-            loc_file = loc.get('file')
-            loc_func = loc.get('function', '')
-            if not local_id or not loc_file or not loc_func:
+            loc_file_raw = loc.get('file')
+            loc_func_raw = loc.get('function', '')
+
+            if not local_id or not loc_file_raw or not loc_func_raw:
                 continue
-            # normalize function name without parameters
-            func_name = loc_func.split('(')[0]
-            # check each metric folder for matching single-metric data
-            for metric_name in os.listdir(metrics_dir):
+
+            # Vulnerability-Dateipfad normalisieren: alles bis inkl. letzter '..' abschneiden
+            loc_file = _normalize_loc_path(loc_file_raw)
+            if not loc_file:
+                continue
+
+            # Nur nackter Funktionsname
+            func_name = _base_func_name(loc_func_raw)
+
+            for metric_name in metric_names:
                 sm_file = os.path.join(metrics_dir, metric_name, f"{project}_{local_id}.json")
                 if not os.path.exists(sm_file):
                     continue
-                # count this sm_file as a candidate (total_vulns) only once per metric
+
                 sm_key = f"{project}_{local_id}"
-                if sm_key not in metric_seen_total.get(metric_name, set()):
+                if sm_key not in metric_seen_total[metric_name]:
                     metric_counters[metric_name]["total_vulns"] += 1
                     metric_seen_total[metric_name].add(sm_key)
+
                 try:
                     with open(sm_file, 'r', encoding='utf-8') as sf:
                         sm_data = json.load(sf)
-                except Exception:
+                except Exception as e:
+                    logging.info(f"Fehler beim Lesen von {sm_file}: {e}")
                     continue
 
-                # track if this vulnerability function signature was found for this metric
                 match_found = False
 
-                # find matching file path in single-metric data
                 for code_path, funcs in sm_data.items():
-                    if code_path.endswith(loc_file):
-                        # find matching function signature
-                        for sig, values in funcs.items():
-                            if sig.split('(')[0] == func_name:
-                                match_found = True
-                                # prepare output file for this metric and vuln
-                                out_path = os.path.join(output_dir, metric_name, f"{project}_{local_id}.json")
-                                # load existing or new container
-                                try:
-                                    with open(out_path, 'r', encoding='utf-8') as of:
-                                        out_data = json.load(of)
-                                except Exception:
-                                    out_data = {}
-                                # append this vulnerability under code_path and signature
-                                out_data.setdefault(code_path, {}).setdefault(sig, []).append({'id': local_id})
-                                # write back
+                    # code_path vereinheitlichen (nur Slashes)
+                    code_path_norm = code_path.replace('\\', '/')
+                    # Vergleich über das Ende: code_path muss auf den bereinigten loc_file enden
+                    if not code_path_norm.endswith(loc_file):
+                        continue
+
+                    for sig in funcs.keys():
+                        sig_base = _base_func_name(sig)
+                        if sig_base == func_name:
+                            match_found = True
+                            out_path = os.path.join(output_dir, metric_name, f"{project}_{local_id}.json")
+                            try:
+                                with open(out_path, 'r', encoding='utf-8') as of:
+                                    out_data = json.load(of)
+                            except Exception:
+                                out_data = {}
+
+                            # In der Ausgabe: Key = originaler code_path, Funktionskey = nackter Name
+                            out_data.setdefault(code_path, {}).setdefault(sig_base, []).append({'id': local_id})
+
+                            try:
                                 with open(out_path, 'w', encoding='utf-8') as of:
                                     json.dump(out_data, of, indent=2, ensure_ascii=False)
-                                # count as found_vulns only once per sm_file
-                                if sm_key not in metric_seen_found.get(metric_name, set()):
-                                    metric_counters[metric_name]["found_vulns"] += 1
-                                    metric_seen_found[metric_name].add(sm_key)
-                # if no matching signature found, record in not-found-methods
+                            except Exception as e:
+                                logging.info(f"Fehler beim Schreiben von {out_path}: {e}")
+
+                            if sm_key not in metric_seen_found[metric_name]:
+                                metric_counters[metric_name]["found_vulns"] += 1
+                                metric_seen_found[metric_name].add(sm_key)
+
                 if not match_found:
                     nf_path = os.path.join(not_found_dir, metric_name, f"{project}_{local_id}.json")
                     try:
@@ -174,22 +283,23 @@ def check_if_function_in_vulns():
                             nf_data = json.load(nf)
                     except Exception:
                         nf_data = {}
-                    # record missing function name under file
+                    # not-found mit bereinigtem Pfad
                     nf_data.setdefault(loc_file, []).append(func_name)
-                    with open(nf_path, 'w', encoding='utf-8') as nf:
-                        json.dump(nf_data, nf, indent=2, ensure_ascii=False)
+                    try:
+                        with open(nf_path, 'w', encoding='utf-8') as nf:
+                            json.dump(nf_data, nf, indent=2, ensure_ascii=False)
+                    except Exception as e:
+                        logging.info(f"Fehler beim Schreiben von {nf_path}: {e}")
 
-    # At end of processing, write per-metric results into general/result.json
+    # write general/result.json
     result_path = os.path.join(general_dir, "result.json")
     try:
-        # load existing to preserve other keys if necessary, otherwise start fresh
         try:
             with open(result_path, 'r', encoding='utf-8') as rf:
                 result_data = json.load(rf)
         except Exception:
             result_data = {}
 
-        # insert/overwrite per-metric entries
         for metric, counters in metric_counters.items():
             result_data[metric] = {
                 "total_vulns": counters["total_vulns"],

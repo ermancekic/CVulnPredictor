@@ -150,7 +150,7 @@ def _looks_like_cxx_header(text_sample: str) -> bool:
 
 def parse_file(source_file, project_name):
     try:
-        # Existenz/Regulärcheck (schützt gegen deine ENOENT-Logs)
+        # Existenz/Regulärcheck (schützt gegen ENOENT)
         if not (os.path.exists(source_file) and os.path.isfile(source_file)):
             logging.info(f"Skip non-regular or missing file: {source_file}")
             return None
@@ -169,13 +169,7 @@ def parse_file(source_file, project_name):
             except Exception:
                 pass
 
-        # libcxx = os.path.join(libclang_path, "..", "..", "include", "c++", "v1")
-        # args = ['-std=c++17', '-x', 'c++', "-isystem", libcxx] if is_cxx else ['-std=c11', '-x', 'c']
-
         args = ['-std=c++17', '-x', 'c++'] if is_cxx else ['-std=c11', '-x', 'c']
-
-        # clang_includes = os.path.join(libclang_path, "..", "clang", "20")
-        # args.extend(["-resource-dir", clang_includes])
 
         # Includes im File scannen
         include_pattern = re.compile(r'#\s*include\s*([<"])([^">]+)[">]')
@@ -201,27 +195,49 @@ def parse_file(source_file, project_name):
             except Exception as e:
                 logging.info(f"Fehler beim Laden von Include-Pfaden {proj_file}: {e}")
 
-        # Basename-Matching der echten Header
+        # Pfadbewusstes Matching der echten Header → richtige Include-Roots ableiten
         missing = []
-        matched_dirs = set()
+        include_roots = set()
+
+        def _norm(p: str) -> str:
+            return p.replace('\\', '/')
+
         for inc_name in include_names:
+            inc_norm = _norm(inc_name)
+
+            # 1) Pfadbewusst: Headerpfad als Suffix matchen (deckt "config/foo.h" ab)
+            path_matches = [
+                h for h in headers
+                if _norm(h).endswith('/' + inc_norm) or _norm(h).endswith(inc_norm)
+            ]
+            if path_matches:
+                for h in path_matches:
+                    h_norm = _norm(h)
+                    # Include-Root = voller Pfad minus "config/foo.h"
+                    root = h_norm[: -len(inc_norm)].rstrip('/\\')
+                    if root:
+                        include_roots.add(root)
+                continue
+
+            # 2) Fallback: nur Basename (für Fälle ohne Unterordner im Include)
             base = os.path.basename(inc_name)
-            matches = [h for h in headers if os.path.basename(h) == base]
-            if matches:
-                for h in matches:
-                    matched_dirs.add(os.path.dirname(h))
+            base_matches = [h for h in headers if os.path.basename(h) == base]
+            if base_matches:
+                for h in base_matches:
+                    include_roots.add(os.path.dirname(h))
             else:
                 missing.append(inc_name)
 
-        for inc_dir in matched_dirs:
+        # am Ende einmalig die -I Pfade anhängen
+        for inc_dir in sorted(include_roots):
             args.extend(['-I', inc_dir])
 
-        # Logging unter data/
+        # Missing-Includes loggen unter data/logs/...
         if missing:
             miss_dir = _data_path('logs', 'missing_includes', project_name)
             os.makedirs(miss_dir, exist_ok=True)
             base = os.path.basename(source_file)
-            stem, _ = os.path.splitext(base)
+            stem, _ext = os.path.splitext(base)
             miss_file = os.path.join(miss_dir, f"{stem}-{_short_hash(os.path.abspath(source_file))}.json")
             with open(miss_file, 'w', encoding='utf-8') as mf:
                 json.dump(missing, mf, indent=2, ensure_ascii=False)
@@ -1111,10 +1127,19 @@ def run(source_path, skip_existing=False):
 
         solution[source_file] = {}
 
-        for c in cursor.get_children():
-            # if os.path.abspath(c.location.file.name) != source_file:
-            #     continue
-
+        for c in cursor.walk_preorder():
+            # Skip cursors that come from other files (headers, included sources).
+            # We only want functions defined in the current source_file.
+            loc = getattr(c, 'location', None)
+            if loc is None or getattr(loc, 'file', None) is None:
+                continue
+            try:
+                node_file = os.path.abspath(loc.file.name)
+            except Exception:
+                continue
+            if node_file != os.path.abspath(source_file):
+                # cursor originates from an included header or different file
+                continue
             if is_function_like(c):
                 try:
                     method_name = get_method_name(c)

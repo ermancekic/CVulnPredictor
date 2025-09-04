@@ -199,7 +199,7 @@ def main():
     # modules.retrieve_arvo_table_data.extract_vuln_location()
     # modules.retrieve_arvo_table_data.delete_null_locations_in_vuln()
 
-    # Extrahiere Quell- und Include-Dateien aus den ARVO Docker Images
+    # # Extrahiere Quell- und Include-Dateien aus den ARVO Docker Images
     # try:
     #     process_arvo_projects(Path("data/arvo-projects"), Path("repositories"))
     # except Exception as e:  # pragma: no cover
@@ -209,14 +209,21 @@ def main():
 
     projects = []
     for entry in os.listdir(base_dir):
-        project = os.path.join(base_dir, entry)
-        if len(os.listdir(project)) <= 0:
+        entry_path = os.path.join(base_dir, entry)
+        if not os.path.isdir(entry_path):
             continue
 
-        for e in os.listdir(project):
-            project_repo = os.path.join(project, e)
-            if e != "include" and os.path.isdir(project_repo):
-                projects.append(project_repo)
+        if "_" not in entry:
+            logging.warning(f"Überspringe {entry}: kein '_' im Ordnernamen gefunden")
+            continue
+
+        repo_name = entry.split("_", 1)[0]
+        repo_dir = os.path.join(entry_path, repo_name)
+
+        if os.path.isdir(repo_dir):
+            projects.append(repo_dir)
+        else:
+            logging.warning(f"Repo-Verzeichnis fehlt: {repo_dir} – überspringe {entry}")
 
     # Calculate metrics
     max_workers = multiprocessing.cpu_count() * 3
@@ -229,9 +236,8 @@ def main():
                 logging.error(f"Fehler bei Projekt: {e}")
 
     # Final result calculations
-    # modules.calculate_results.separate_and_filter_calculated_metrics(thresholds)
+    modules.calculate_results.separate_and_filter_calculated_metrics(thresholds)
     modules.calculate_results.check_if_function_in_vulns()
-    modules.calculate_results.calculate_infos()
 
 if __name__ == "__main__":
     main()
