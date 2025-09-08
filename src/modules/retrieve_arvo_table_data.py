@@ -253,11 +253,11 @@ def extract_vuln_location():
             with open(file_path, "r", encoding="utf-8") as f:
                 reports = json.load(f)
         except Exception as e:
-            print(f"Skipping {file_path}: failed to read JSON ({e})")
+            logging.warning(f"Skipping {file_path}: failed to read JSON ({e})")
             continue
 
         if not isinstance(reports, list):
-            print(f"Skipping {file_path}: JSON is not a list")
+            logging.warning(f"Skipping {file_path}: JSON is not a list")
             continue
 
         with multiprocessing.Pool(cpu_count) as pool:
@@ -266,9 +266,9 @@ def extract_vuln_location():
         try:
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(reports_out, f, indent=2, ensure_ascii=False)
-            print(f"Wrote locations into {file_path}")
+            logging.info(f"Wrote locations into {file_path}")
         except Exception as e:
-            print(f"Failed to write {file_path}: {e}")
+            logging.error(f"Failed to write {file_path}: {e}")
 
 def delete_null_locations_in_vuln():
     """

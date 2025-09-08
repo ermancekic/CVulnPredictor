@@ -1107,7 +1107,7 @@ def run(source_path, skip_existing=False):
     project_name = get_project_name(source_path)
 
     # Clear old missing_includes logs for this project
-    missing_root = os.path.join(os.getcwd(), 'logs', 'missing_includes', project_name)
+    missing_root = os.path.join(os.getcwd(), 'data', 'logs', 'missing_includes', project_name)
     if os.path.isdir(missing_root):
         shutil.rmtree(missing_root)
 

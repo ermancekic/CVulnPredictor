@@ -141,6 +141,123 @@ def _base_func_name(sig: str) -> str:
 
     return name
 
+def _find_param_span(sig: str) -> tuple[int, int] | tuple[None, None]:
+    """
+    Returns the (start, end) indices of the top-level parameter list in sig,
+    i.e., the parentheses of the function call signature. If none found, (None, None).
+    This walks backward from the last ')' to find the matching '('.
+    """
+    if not sig:
+        return (None, None)
+    s = sig.strip()
+    rp = s.rfind(')')
+    if rp == -1:
+        return (None, None)
+    depth = 0
+    for i in range(rp, -1, -1):
+        ch = s[i]
+        if ch == ')':
+            depth += 1
+        elif ch == '(':
+            depth -= 1
+            if depth == 0:
+                return (i, rp)
+    return (None, None)
+
+def _split_top_level_commas(s: str) -> list[str]:
+    """
+    Split a string by commas, ignoring commas that are nested inside angle brackets or
+    parentheses. Used to split parameter lists without breaking template args.
+    """
+    parts = []
+    buf = []
+    depth_angle = 0
+    depth_paren = 0
+    for ch in s:
+        if ch == '<':
+            depth_angle += 1
+        elif ch == '>':
+            if depth_angle > 0:
+                depth_angle -= 1
+        elif ch == '(':
+            depth_paren += 1
+        elif ch == ')':
+            if depth_paren > 0:
+                depth_paren -= 1
+        if ch == ',' and depth_angle == 0 and depth_paren == 0:
+            parts.append(''.join(buf).strip())
+            buf = []
+        else:
+            buf.append(ch)
+    if buf:
+        parts.append(''.join(buf).strip())
+    return parts
+
+def _extract_param_list(sig: str) -> list[str] | None:
+    """
+    Extracts a raw list of parameter strings from a function signature string.
+    Returns None if no parameter list is present (e.g., missing parentheses entirely).
+    Returns [] for an empty list '()'.
+    """
+    lp, rp = _find_param_span(sig)
+    if lp is None or rp is None or rp <= lp:
+        return None
+    inner = sig[lp + 1:rp].strip()
+    if inner == "":
+        return []
+    # Skip purely variadic-only notation
+    if inner == '...':
+        return []
+    return _split_top_level_commas(inner)
+
+def _normalize_type_name(t: str) -> str:
+    """
+    Best-effort normalization of a parameter type string:
+    - drop default values (after '=') and most qualifiers (const/volatile/restrict/struct/class/enum/typename)
+    - remove a likely parameter name at the end (heuristic)
+    - normalize whitespace around '*' and '&'
+    This is heuristic by design; we primarily rely on parameter COUNT for matching.
+    """
+    import re as _re
+    s = (t or '').strip()
+    if not s:
+        return ''
+    # Cut default value
+    s = s.split('=', 1)[0].strip()
+    # Remove common qualifiers/keywords
+    remove_words = {
+        'const', 'volatile', 'restrict', 'struct', 'class', 'enum', 'register', 'mutable', 'typename'
+    }
+    tokens = [tok for tok in _re.split(r'\s+', s) if tok and tok not in remove_words]
+    s = ' '.join(tokens)
+    # Heuristic: drop trailing parameter name token (no *,&,::,[],<,>)
+    toks = s.split()
+    if len(toks) >= 2:
+        last = toks[-1]
+        if _re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', last) and all(c not in last for c in ('*', '&', ':', '[', ']', '<', '>')):
+            toks = toks[:-1]
+    s = ' '.join(toks)
+    # Normalize pointer/ref attachment
+    s = _re.sub(r'\s*\*\s*', '*', s)
+    s = _re.sub(r'\s*&\s*', '&', s)
+    s = _re.sub(r'\s+', ' ', s).strip()
+    return s
+
+def _param_info(sig: str) -> tuple[int | None, list[str] | None]:
+    """
+    Returns (count, normalized_types or None) for a signature string.
+    If parameters cannot be determined, returns (None, None).
+    """
+    raw = _extract_param_list(sig)
+    if raw is None:
+        return (None, None)
+    if not raw:
+        return (0, [])
+    # Normalize each param; ignore empty strings (defensive)
+    norm = [_normalize_type_name(p) for p in raw]
+    norm = [p for p in norm if p != '']
+    return (len(raw), norm if norm else [])
+
 def _normalize_loc_path(p: str) -> str:
     """
     Removes everything up to and including the last '..' sequence and normalizes slashes.
@@ -223,8 +340,9 @@ def check_if_function_in_vulns():
             if not loc_file:
                 continue
 
-            # Only bare function name
+            # Bare function name and parameter info (if available)
             func_name = _base_func_name(loc_func_raw)
+            vuln_param_count, vuln_param_types = _param_info(loc_func_raw)
 
             for metric_name in metric_names:
                 sm_file = os.path.join(metrics_dir, metric_name, f"{project}_{local_id}.json")
@@ -254,27 +372,66 @@ def check_if_function_in_vulns():
 
                     for sig in funcs.keys():
                         sig_base = _base_func_name(sig)
-                        if sig_base == func_name:
-                            match_found = True
-                            out_path = os.path.join(output_dir, metric_name, f"{project}_{local_id}.json")
-                            try:
-                                with open(out_path, 'r', encoding='utf-8') as of:
-                                    out_data = json.load(of)
-                            except Exception:
-                                out_data = {}
+                        if sig_base != func_name:
+                            continue
 
-                            # In output: Key = original code_path, function key = bare name
-                            out_data.setdefault(code_path, {}).setdefault(sig_base, []).append({'id': local_id})
+                        # Parameter-aware matching:
+                        # If vulnerability signature exposes parameter info, require same arity only.
+                        # The stricter type-equality checks are intentionally commented out per request.
+                        sig_param_count, sig_param_types = _param_info(sig)
+                        if vuln_param_count is not None:
+                            # If metrics signature has no parameters parsed, fall back to name-only
+                            if sig_param_count is not None and sig_param_count != vuln_param_count:
+                                continue
+                            # Optional: if both sides have normalized types, require equality
+                            # (Deactivated to only compare parameter count)
+                            # if (
+                            #     sig_param_types is not None
+                            #     and vuln_param_types is not None
+                            #     and sig_param_types
+                            #     and vuln_param_types
+                            #     and sig_param_types != vuln_param_types
+                            # ):
+                            #     continue
 
-                            try:
-                                with open(out_path, 'w', encoding='utf-8') as of:
-                                    json.dump(out_data, of, indent=2, ensure_ascii=False)
-                            except Exception as e:
-                                logging.info(f"Error writing {out_path}: {e}")
+                        # If we get here, we consider it a match
+                        match_found = True
+                        out_path = os.path.join(output_dir, metric_name, f"{project}_{local_id}.json")
+                        try:
+                            with open(out_path, 'r', encoding='utf-8') as of:
+                                out_data = json.load(of)
+                        except Exception:
+                            out_data = {}
 
-                            if sm_key not in metric_seen_found[metric_name]:
-                                metric_counters[metric_name]["found_vulns"] += 1
-                                metric_seen_found[metric_name].add(sm_key)
+                        # In output: Key = original code_path, function key = bare name
+                        # Enrich each found entry with the same details as not-found
+                        # Prefer vulnerability-side params if provided; otherwise fall back to metrics-side
+                        log_param_count = vuln_param_count if vuln_param_count is not None else sig_param_count
+                        log_param_types = (
+                            vuln_param_types if (vuln_param_types not in (None, [])) else (sig_param_types or [])
+                        )
+
+                        found_entry = {
+                            'id': local_id,
+                            'function': func_name,
+                            'signature': loc_func_raw,
+                            'param_count': log_param_count,
+                            'param_types': log_param_types,
+                            'metrics_signature': sig,
+                            'metrics_param_count': sig_param_count,
+                            'metrics_param_types': sig_param_types if sig_param_types is not None else [],
+                        }
+                        out_data.setdefault(code_path, {}).setdefault(sig_base, []).append(found_entry)
+
+                        try:
+                            with open(out_path, 'w', encoding='utf-8') as of:
+                                json.dump(out_data, of, indent=2, ensure_ascii=False)
+                        except Exception as e:
+                            logging.info(f"Error writing {out_path}: {e}")
+
+                        if sm_key not in metric_seen_found[metric_name]:
+                            metric_counters[metric_name]["found_vulns"] += 1
+                            metric_seen_found[metric_name].add(sm_key)
 
                 if not match_found:
                     nf_path = os.path.join(not_found_dir, metric_name, f"{project}_{local_id}.json")
@@ -283,8 +440,18 @@ def check_if_function_in_vulns():
                             nf_data = json.load(nf)
                     except Exception:
                         nf_data = {}
-                    # not-found with cleaned path
-                    nf_data.setdefault(loc_file, []).append(func_name)
+
+                    # Enriched not-found entry with signature and parameter details
+                    # Keep the structure grouped by normalized file path
+                    entry = {
+                        "function": func_name,
+                        "signature": loc_func_raw,
+                        "param_count": vuln_param_count,
+                        "param_types": vuln_param_types if vuln_param_types is not None else [],
+                    }
+
+                    nf_data.setdefault(loc_file, []).append(entry)
+
                     try:
                         with open(nf_path, 'w', encoding='utf-8') as nf:
                             json.dump(nf_data, nf, indent=2, ensure_ascii=False)
