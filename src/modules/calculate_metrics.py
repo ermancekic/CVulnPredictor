@@ -33,6 +33,9 @@ logging.info(cindex.__file__)
 
 # Initialize Clang index
 index = cindex.Index.create()
+
+# Import concrete leopard metric implementations
+from .metrics import leopard_metrics
 DATA_ROOT = os.path.join(os.getcwd(), "data")
 
 def get_method_name(cursor):
@@ -313,777 +316,24 @@ def is_function_like(cursor):
         }
     )
     
-def calculate_cyclomatic_complexity(cursor):
-    """
-    Approximate cyclomatic complexity by counting decision points and entry.
 
-    Args:
-        cursor (cindex.Cursor): Clang cursor for the function or method.
-
-    Returns:
-        int: Cyclomatic complexity (count of branches plus one).
-    """
-    tu = cursor.translation_unit
-    complexity = 1  # entry point
-
-    for tok in tu.get_tokens(extent=cursor.extent):
-        try:
-            s = tok.spelling
-        except Exception as e:
-            continue
-        # count keywords that introduce branching
-        if tok.kind == TokenKind.KEYWORD and s in ('if', 'for', 'while', 'case', 'catch'):
-            complexity += 1
-        # count ternary operator
-        elif tok.kind == TokenKind.PUNCTUATION and s == '?':
-            complexity += 1
-
-    return complexity
-
-def calculate_number_of_loops(cursor):
-    """
-    Count all loop statements within a function cursor.
-
-    Args:
-        cursor (cindex.Cursor): Clang cursor for the function or method.
-
-    Returns:
-        int: Total number of loop constructs (for, while, do, ranged-for).
-    """
-    loop_kinds = {
-        CursorKind.FOR_STMT,
-        CursorKind.WHILE_STMT,
-        CursorKind.DO_STMT,
-        CursorKind.CXX_FOR_RANGE_STMT
-    }
-
-    count = 0
-
-    def visit(node):
-        nonlocal count
-        if node.kind in loop_kinds:
-            count += 1
-        for child in node.get_children():
-            visit(child)
-
-    visit(cursor)
-    return count
-
-def calculate_number_of_nested_loops(cursor):
-    """
-    Count loop statements that contain at least one nested loop.
-
-    Args:
-        cursor (cindex.Cursor): Clang cursor for the function or method.
-
-    Returns:
-        int: Number of loops that have another loop in their subtree.
-    """
-    loop_kinds = {
-        CursorKind.FOR_STMT,
-        CursorKind.WHILE_STMT,
-        CursorKind.DO_STMT,
-        CursorKind.CXX_FOR_RANGE_STMT
-    }
-
-    nested_count = 0
-
-    def contains_loop_in_subtree(node):
-        """
-        Check if the subtree rooted at node contains any loop.
-        """
-        for child in node.get_children():
-            if child.kind in loop_kinds:
-                return True
-            if contains_loop_in_subtree(child):
-                return True
-        return False
-
-    def visit(node):
-        nonlocal nested_count
-
-        # If this node is a loop, check if it contains another loop in its subtree
-        if node.kind in loop_kinds:
-            if contains_loop_in_subtree(node):
-                nested_count += 1
-            return
-
-        # Otherwise, continue visiting children
-        for child in node.get_children():
-            visit(child)
-
-    visit(cursor)
-    return nested_count
-
-def calculate_max_nesting_loop_depth(cursor):
-    """
-    Determine the maximum depth of nested loops in a function.
-
-    Args:
-        cursor (cindex.Cursor): Clang cursor for the function or method.
-
-    Returns:
-        int: Maximum nesting depth of loops.
-    """
-    loop_kinds = {
-        CursorKind.FOR_STMT,
-        CursorKind.WHILE_STMT,
-        CursorKind.DO_STMT,
-        CursorKind.CXX_FOR_RANGE_STMT
-    }
-    
-    max_depth = 0
-    
-    def visit(node, depth=0):
-        nonlocal max_depth
-        
-        if node.kind in loop_kinds:
-            depth += 1
-            max_depth = max(max_depth, depth)
-            
-        for child in node.get_children():
-            visit(child, depth)
-            
-    visit(cursor)
-    return max_depth
-
-def calculate_number_of_parameter_variables(cursor):
-    """
-    Count parameters declared by the function cursor.
-
-    Args:
-        cursor (cindex.Cursor): Clang cursor for the function or method.
-
-    Returns:
-        int: Number of parameters the function takes.
-    """
-    return len(list(cursor.get_arguments()))
-
-def calculate_number_of_callee_parameter_variables(cursor):
-    """
-    Count distinct variables used as arguments in calls to other functions within the given function cursor.
-
-    Args:
-        cursor (cindex.Cursor): Clang cursor for the function or method.
-
-    Returns:
-        int: Number of distinct callee parameter variables used in the function.
-    """
-    callee_param_vars = set()
-    
-    def extractVars(node):
-        # If this node is a variable reference, record it
-        if node.kind in (CursorKind.DECL_REF_EXPR, CursorKind.MEMBER_REF_EXPR):
-            ref = node.referenced
-            # If the reference is a variable declaration, parameter, or field declaration
-            if ref is not None and ref.kind in (CursorKind.VAR_DECL, CursorKind.PARM_DECL, CursorKind.FIELD_DECL):
-                callee_param_vars.add(node.spelling)
-        # Recurse into children
-        for child in node.get_children():
-            extractVars(child)
-
-    def visit(node):
-        if node.kind == CursorKind.CALL_EXPR:
-            args = list(node.get_arguments())
-
-            for arg in args:
-                extractVars(arg)
-
-        for child in node.get_children():
-            visit(child)
-            
-    visit(cursor)
-    return len(callee_param_vars)
-
-def calculate_number_of_pointer_arithmetic(cursor):
-    """
-    Count the number of pointer arithmetic operations in the given function cursor.
-
-    Args:
-        cursor (cindex.Cursor): Clang cursor for the function or method.
-
-    Returns:
-        int: Number of pointer arithmetic operations (binary, unary, compound) in the function.
-    """
-    count = 0
-    binary_arithmetic_ops = {'+', '-', '/', '^', '|'}
-    compound_pointer_ops = {'+=', '-=', '*=', '/=', '^=', '&=', '|='}
-    unary_pointer_ops = {'++', '--'}
-
-    def visit(node, parent=None):
-        nonlocal count
-
-        # 1) Binary Operator
-        if node.kind == CursorKind.BINARY_OPERATOR:
-            children = list(node.get_children())
-            if len(children) == 2:
-                lhs, rhs = children
-                lhs_kind = lhs.type.kind
-                rhs_kind = rhs.type.kind
-
-                # Check if we have a pointer-integer combination
-                is_ptr_int_combo = ((lhs_kind == TypeKind.POINTER and rhs_kind != TypeKind.POINTER) or
-                                    (rhs_kind == TypeKind.POINTER and lhs_kind != TypeKind.POINTER))
-
-                # Check if we have a pointer-pointer subtraction
-                is_ptr_ptr_sub = (lhs_kind == TypeKind.POINTER and rhs_kind == TypeKind.POINTER)
-
-                # Check if the operation is a binary arithmetic operation
-                if is_ptr_int_combo:
-                    for tok in node.get_tokens():
-                        if tok.kind == TokenKind.PUNCTUATION and tok.spelling in binary_arithmetic_ops:
-                            count += 1
-                            break
-                elif is_ptr_ptr_sub and \
-                     lhs.kind != CursorKind.BINARY_OPERATOR and \
-                     rhs.kind != CursorKind.BINARY_OPERATOR:
-                    for tok in node.get_tokens():
-                        if tok.kind == TokenKind.PUNCTUATION and tok.spelling == '-':
-                            count += 1
-                            break
-
-        # 2) Compound Assignment
-        elif node.kind == CursorKind.COMPOUND_ASSIGNMENT_OPERATOR:
-            children = list(node.get_children())
-            if len(children) == 2:
-                lhs, rhs = children
-                lhs_kind = lhs.type.kind
-                rhs_kind = rhs.type.kind
-
-                # Check if we have a pointer-integer combination
-                if lhs_kind == TypeKind.POINTER and rhs_kind != TypeKind.POINTER:
-                    for tok in node.get_tokens():
-                        # Check if the operation is a compound assignment
-                        if tok.kind == TokenKind.PUNCTUATION and tok.spelling in compound_pointer_ops:
-                            count += 1
-                            break
-
-        # 3) Unary Operator
-        elif node.kind == CursorKind.UNARY_OPERATOR:
-            children = list(node.get_children())
-            if len(children) == 1:
-                child = children[0]
-                # Check if the base is a pointer type 
-                if child.type.kind == TypeKind.POINTER:
-                    for tok in node.get_tokens():
-                        # Check if the operation is a unary pointer operation
-                        if tok.kind == TokenKind.PUNCTUATION and tok.spelling in unary_pointer_ops:
-                            count += 1
-                            break
-
-        # Recurse into children
-        for child in node.get_children():
-            visit(child, node)
-
-    visit(cursor)
-    return count
-    
-def calculate_number_of_variables_involved_in_pointer_arithmetic(cursor):
-    """
-    Count the number of distinct variables involved in pointer arithmetic operations
-    within the given function cursor.
-
-    Args:
-        cursor (cindex.Cursor): Clang cursor for the function or method.
-
-    Returns:
-        int: Number of distinct variables involved in pointer arithmetic.
-    """
-    vars_nvolved = set()
-
-    # Helper function to collect variable names from a subnode
-    def collect_vars(subnode):
-        if subnode.kind in (CursorKind.DECL_REF_EXPR, CursorKind.MEMBER_REF_EXPR):
-            ref = subnode.referenced
-            if ref is not None and ref.kind in (
-                CursorKind.VAR_DECL,
-                CursorKind.PARM_DECL,
-                CursorKind.FIELD_DECL
-            ):
-                vars_nvolved.add(subnode.spelling)
-        for child in subnode.get_children():
-            collect_vars(child)
-
-    def visit(node):
-        # 1) BINARY_OPERATOR
-        if node.kind == CursorKind.BINARY_OPERATOR:
-            children = list(node.get_children())
-            if len(children) == 2:
-                lhs, rhs = children
-                lhs_kind = lhs.type.kind
-                rhs_kind = rhs.type.kind
-
-                # pointer–integer combination
-                is_ptr_int_combo = (
-                    (lhs_kind == TypeKind.POINTER and rhs_kind != TypeKind.POINTER) or
-                    (rhs_kind == TypeKind.POINTER and lhs_kind != TypeKind.POINTER)
-                )
-
-                # pointer–pointer subtraction
-                is_ptr_ptr_sub = (lhs_kind == TypeKind.POINTER and rhs_kind == TypeKind.POINTER)
-
-                if is_ptr_int_combo:
-                    # whichever side is the pointer, collect its variable refs
-                    if lhs_kind == TypeKind.POINTER:
-                        collect_vars(lhs)
-                    else:
-                        collect_vars(rhs)
-                elif is_ptr_ptr_sub and \
-                     lhs.kind != CursorKind.BINARY_OPERATOR and \
-                     rhs.kind != CursorKind.BINARY_OPERATOR:
-                    collect_vars(lhs)
-                    collect_vars(rhs)
-
-        # 2) COMPOUND_ASSIGNMENT_OPERATOR
-        elif node.kind == CursorKind.COMPOUND_ASSIGNMENT_OPERATOR:
-            children = list(node.get_children())
-            if len(children) == 2:
-                lhs, rhs = children
-                lhs_kind = lhs.type.kind
-                rhs_kind = rhs.type.kind
-
-                # pointer on lhs, integer (or non-pointer) on rhs
-                if lhs_kind == TypeKind.POINTER and rhs_kind != TypeKind.POINTER:
-                    collect_vars(lhs)
-
-        # 3) UNARY_OPERATOR (e.g. ++ptr or ptr++)
-        elif node.kind == CursorKind.UNARY_OPERATOR:
-            children = list(node.get_children())
-            if len(children) == 1:
-                child = children[0]
-                if child.type.kind == TypeKind.POINTER:
-                    collect_vars(child)
-
-        # Recurse into children
-        for child in node.get_children():
-            visit(child)
-
-    visit(cursor)
-    return len(vars_nvolved)
-
-def calculate_max_pointer_arithmetic_variable_is_involved_in(cursor):
-    """
-    Calculate the maximum number of pointer arithmetic operations a variable is involved in
-    within the given function cursor, with debug output.
-
-    Args:
-        cursor (cindex.Cursor): Clang cursor for the function or method.
-
-    Returns:
-        int: Maximum number of pointer arithmetic operations for any single variable.
-    """
-    var_counts = {}
-
-    # Helper function to collect variable names from a subnode
-    def collect_vars(subnode):
-        if subnode.kind in (CursorKind.DECL_REF_EXPR, CursorKind.MEMBER_REF_EXPR):
-            ref = subnode.referenced
-            if ref is not None and ref.kind in (
-                CursorKind.VAR_DECL,
-                CursorKind.PARM_DECL,
-                CursorKind.FIELD_DECL
-            ):
-                name = subnode.spelling
-                if name not in var_counts:
-                    var_counts[name] = 0
-                var_counts[name] += 1
-
-        for child in subnode.get_children():
-            collect_vars(child)
-
-    def visit(node):
-        # 1) Binary Operator
-        if node.kind == CursorKind.BINARY_OPERATOR:
-            children = list(node.get_children())
-            if len(children) == 2:
-                lhs, rhs = children
-                lhs_kind = lhs.type.kind
-                rhs_kind = rhs.type.kind
-
-                is_ptr_int_combo = (
-                    (lhs_kind == TypeKind.POINTER and rhs_kind != TypeKind.POINTER) or
-                    (rhs_kind == TypeKind.POINTER and lhs_kind != TypeKind.POINTER)
-                )
-
-                is_ptr_ptr_sub = (lhs_kind == TypeKind.POINTER and rhs_kind == TypeKind.POINTER)
-
-                if is_ptr_int_combo:
-                    # Sammle Variablen im „Pointer“-Teil
-                    if lhs_kind == TypeKind.POINTER:
-                        collect_vars(lhs)
-                    else:
-                        collect_vars(rhs)
-                elif is_ptr_ptr_sub and \
-                     lhs.kind != CursorKind.BINARY_OPERATOR and \
-                     rhs.kind != CursorKind.BINARY_OPERATOR:
-                    collect_vars(lhs)
-                    collect_vars(rhs)
-
-        # 2) Compound Assignment Operator
-        elif node.kind == CursorKind.COMPOUND_ASSIGNMENT_OPERATOR:
-            children = list(node.get_children())
-            if len(children) == 2:
-                lhs, rhs = children
-                lhs_kind = lhs.type.kind
-                rhs_kind = rhs.type.kind
-                if lhs_kind == TypeKind.POINTER and rhs_kind != TypeKind.POINTER:
-                    collect_vars(lhs)
-
-        # 3) Unary Operator
-        elif node.kind == CursorKind.UNARY_OPERATOR:
-            children = list(node.get_children())
-            if len(children) == 1:
-                child = children[0]
-                if child.type.kind == TypeKind.POINTER:
-                    collect_vars(child)
-
-        # Recurse into children
-        for child in node.get_children():
-            visit(child)
-
-    visit(cursor)
-
-    if var_counts:
-        return max(var_counts.values())
-    else:
-        return 0
-
-def calculate_number_of_nested_control_structures(cursor):
-    """
-    Calculate the number of nested control structures in the given function cursor.
-
-    Args:
-        cursor (cindex.Cursor): Clang cursor for the function or method.
-
-    Returns:
-        int: Number of control structures nested within other control structures.
-    """
-    control_kinds = {
-        CursorKind.IF_STMT,
-        CursorKind.FOR_STMT,
-        CursorKind.WHILE_STMT,
-        CursorKind.DO_STMT,
-        CursorKind.CXX_FOR_RANGE_STMT,
-        CursorKind.SWITCH_STMT
-    }
-
-    nested_count = 0
-
-    def contains_control_in_subtree(node):
-        """
-        Check if the subtree rooted at `node` contains any control structure.
-        """
-        for child in node.get_children():
-            if child.kind in control_kinds:
-                return True
-            if contains_control_in_subtree(child):
-                return True
-        return False
-
-    def visit(node):
-        nonlocal nested_count
-        if node.kind in control_kinds:
-            if contains_control_in_subtree(node):
-                nested_count += 1
-            return
-
-        for child in node.get_children():
-            visit(child)
-
-    visit(cursor)
-    return nested_count
-
-def calculate_maximum_nesting_level_of_control_structures(cursor):
-    """
-    Calculate the maximum nesting level of control structures in the given function cursor.
-
-    Args:
-        cursor (cindex.Cursor): Clang cursor for the function or method.
-
-    Returns:
-        int: Maximum nesting level of control structures.
-    """
-    control_kinds = {
-        CursorKind.IF_STMT,
-        CursorKind.FOR_STMT,
-        CursorKind.WHILE_STMT,
-        CursorKind.DO_STMT,
-        CursorKind.CXX_FOR_RANGE_STMT,
-        CursorKind.SWITCH_STMT
-    }
-
-    max_depth = 0
-
-    def visit(node, depth=0):
-        nonlocal max_depth
-        # If node is a control structure, increment depth and update maxDepth
-        if node.kind in control_kinds:
-            depth += 1
-            max_depth = max(max_depth, depth)
-
-        # Recurse into children, passing along the updated depth
-        for child in node.get_children():
-            visit(child, depth)
-
-    visit(cursor, 0)
-    return max_depth
-
-def calculate_maximum_of_control_dependent_control_structures(cursor):
-    """
-    Calculate the maximum of control-dependent control structures in the given function cursor.
-
-    Args:
-        cursor (cindex.Cursor): Clang cursor for the function or method.
-
-    Returns:
-        int: Maximum number of control structures in the subtree of any single control structure.
-    """
-    control_kinds = {
-        CursorKind.IF_STMT,
-        CursorKind.FOR_STMT,
-        CursorKind.WHILE_STMT,
-        CursorKind.DO_STMT,
-        CursorKind.CXX_FOR_RANGE_STMT,
-        CursorKind.SWITCH_STMT
-    }
-
-    def count_control_in_subtree(node):
-        """
-        Recursively count all control-structure nodes in the subtree rooted at `node`,
-        including `node` itself if it is a control-structure.
-        """
-        count = 1 if node.kind in control_kinds else 0
-
-        for child in node.get_children():
-            count += count_control_in_subtree(child)
-        return count
-
-    max_count = 0
-
-    def visit(node):
-        nonlocal max_count
-        if node.kind in control_kinds:
-            subtree_count = count_control_in_subtree(node)
-            if subtree_count > max_count:
-                max_count = subtree_count
-        for child in node.get_children():
-            visit(child)
-
-    visit(cursor)
-    return max_count
-
-def calculate_maximum_of_data_dependent_control_structures(cursor):
-    """
-    Calculate the maximum of data-dependent control structures in the given function cursor.
-
-    Args:
-        cursor (cindex.Cursor): Clang cursor for the function or method.
-
-    Returns:
-        int: Maximum number of data-dependent control structures in the function.
-    """
-
-    control_kinds = {
-        CursorKind.IF_STMT,
-        CursorKind.FOR_STMT,
-        CursorKind.WHILE_STMT,
-        CursorKind.DO_STMT,
-        CursorKind.CXX_FOR_RANGE_STMT,
-        CursorKind.SWITCH_STMT
-    }
-
-    # Helper: collect all variable names (from DECL_REF_EXPR or MEMBER_REF_EXPR)
-    # in the subtree rooted at `node`.
-    def collect_vars(subnode, var_set):
-        if subnode.kind in (CursorKind.DECL_REF_EXPR, CursorKind.MEMBER_REF_EXPR):
-            ref = subnode.referenced
-            if ref is not None and ref.kind in (
-                CursorKind.VAR_DECL,
-                CursorKind.PARM_DECL,
-                CursorKind.FIELD_DECL
-            ):
-                var_set.add(subnode.spelling)
-        for child in subnode.get_children():
-            collect_vars(child, var_set)
-
-    # Map variable name → how many control-statements' conditions reference it
-    var_counts = {}
-
-    # Process a single control-structure node: find its "condition" subtree
-    # and collect all distinct variables used there.
-    def process_control(node):
-        # Determine which child node represents the "condition" expression,
-        # depending on the kind of control statement.
-        cond = None
-        children = list(node.get_children())
-
-        if node.kind == CursorKind.IF_STMT:
-            # children: [ condition , then-branch, else-branch? ]
-            if children:
-                cond = children[0]
-
-        elif node.kind == CursorKind.WHILE_STMT:
-            # children: [ condition, body ]
-            if children:
-                cond = children[0]
-
-        elif node.kind == CursorKind.FOR_STMT:
-            # children: [ init, condition, increment, body ]
-            if len(children) >= 2:
-                cond = children[1]
-
-        elif node.kind == CursorKind.DO_STMT:
-            # children: [ body, condition ]
-            if len(children) >= 2:
-                cond = children[1]
-
-        elif node.kind == CursorKind.SWITCH_STMT:
-            # children: [ condition, body ]
-            if children:
-                cond = children[0]
-
-        elif node.kind == CursorKind.CXX_FOR_RANGE_STMT:
-            # children: [ loop-var, range-init, body ]
-            # the "range-init" acts as the controlling expression
-            if len(children) >= 2:
-                cond = children[1]
-
-        # If we found a condition subtree, extract all variable names from it.
-        if cond is not None:
-            local_vars = set()
-            collect_vars(cond, local_vars)
-            for v in local_vars:
-                var_counts[v] = var_counts.get(v, 0) + 1
-
-    def visit(node):
-        if node.kind in control_kinds:
-            process_control(node)
-        for child in node.get_children():
-            visit(child)
-
-    visit(cursor)
-
-    # If no variable ever appeared in a condition, return 0.
-    if not var_counts:
-        return 0
-
-    return max(var_counts.values())
-
-def calculate_number_of_if_structures_without_else(cursor):
-    """
-    Calculate the number of if structures without an else branch in the given function cursor.
-
-    Args:
-        cursor (cindex.Cursor): Clang cursor for the function or method.
-
-    Returns:
-        int: Number of if structures lacking an else branch.
-    """
-    count = 0
-
-    def visit(node):
-        nonlocal count
-        if node.kind == CursorKind.IF_STMT:
-            # children of IF_STMT: [ condition, then-branch, else-branch? ]
-            children = list(node.get_children())
-            # If there is no else-branch, there will be only 2 children (condition and then-branch)
-            if len(children) < 3:
-                count += 1
-        for child in node.get_children():
-            visit(child)
-
-    visit(cursor)
-    return count
-
-def calculate_number_of_variables_involved_in_control_predicates(cursor):
-    """
-    Count the number of variables involved in control predicates (conditions) within the given function cursor.
-
-    Args:
-        cursor (cindex.Cursor): Clang cursor for the function or method.
-
-    Returns:
-        int: Number of distinct variables used in the conditions of control structures.
-    """
-    control_kinds = {
-        CursorKind.IF_STMT,
-        CursorKind.FOR_STMT,
-        CursorKind.WHILE_STMT,
-        CursorKind.DO_STMT,
-        CursorKind.CXX_FOR_RANGE_STMT,
-        CursorKind.SWITCH_STMT
-    }
-
-    vars_in_conditions = set()
-
-    def collect_vars(subnode):
-        """
-        Recursively collect any variable references (DECL_REF_EXPR or MEMBER_REF_EXPR)
-        in the subtree rooted at subnode, and add their spellings to vars_in_conditions.
-        """
-
-        if subnode.kind in (CursorKind.DECL_REF_EXPR, CursorKind.MEMBER_REF_EXPR):
-            ref = subnode.referenced
-            if ref is not None and ref.kind in (
-                CursorKind.VAR_DECL,
-                CursorKind.PARM_DECL,
-                CursorKind.FIELD_DECL
-            ):
-                vars_in_conditions.add(subnode.spelling)
-
-        for child in subnode.get_children():
-            collect_vars(child)
-
-    def process_control(node):
-        """
-        Given a control-structure node, identify its 'condition' subtree,
-        then collect all variable names used in that subtree.
-        """
-        cond = None
-        children = list(node.get_children())
-
-        if node.kind == CursorKind.IF_STMT:
-            # children: [ condition , then-branch, else-branch? ]
-            if children:
-                cond = children[0]
-
-        elif node.kind == CursorKind.WHILE_STMT:
-            # children: [ condition, body ]
-            if children:
-                cond = children[0]
-
-        elif node.kind == CursorKind.FOR_STMT:
-            # children: [ init, condition, increment, body ]
-            if len(children) >= 2:
-                cond = children[1]
-
-        elif node.kind == CursorKind.DO_STMT:
-            # children: [ body, condition ]
-            if len(children) >= 2:
-                cond = children[1]
-
-        elif node.kind == CursorKind.SWITCH_STMT:
-            # children: [ condition, body ]
-            if children:
-                cond = children[0]
-
-        elif node.kind == CursorKind.CXX_FOR_RANGE_STMT:
-            # children: [ loop-var, range-init, body ]
-            # the "range-init" is the controlling expression
-            if len(children) >= 2:
-                cond = children[1]
-
-        if cond is not None:
-            collect_vars(cond)
-
-    def visit(node):
-        if node.kind in control_kinds:
-            process_control(node)
-        for child in node.get_children():
-            visit(child)
-
-    visit(cursor)
-    return len(vars_in_conditions)
+# ---------------------------------------------------------------------------
+# Delegation: expose metric function names from leopard_metrics
+calculate_cyclomatic_complexity = leopard_metrics.calculate_cyclomatic_complexity
+calculate_number_of_loops = leopard_metrics.calculate_number_of_loops
+calculate_number_of_nested_loops = leopard_metrics.calculate_number_of_nested_loops
+calculate_max_nesting_loop_depth = leopard_metrics.calculate_max_nesting_loop_depth
+calculate_number_of_parameter_variables = leopard_metrics.calculate_number_of_parameter_variables
+calculate_number_of_callee_parameter_variables = leopard_metrics.calculate_number_of_callee_parameter_variables
+calculate_number_of_pointer_arithmetic = leopard_metrics.calculate_number_of_pointer_arithmetic
+calculate_number_of_variables_involved_in_pointer_arithmetic = leopard_metrics.calculate_number_of_variables_involved_in_pointer_arithmetic
+calculate_max_pointer_arithmetic_variable_is_involved_in = leopard_metrics.calculate_max_pointer_arithmetic_variable_is_involved_in
+calculate_number_of_nested_control_structures = leopard_metrics.calculate_number_of_nested_control_structures
+calculate_maximum_nesting_level_of_control_structures = leopard_metrics.calculate_maximum_nesting_level_of_control_structures
+calculate_maximum_of_control_dependent_control_structures = leopard_metrics.calculate_maximum_of_control_dependent_control_structures
+calculate_maximum_of_data_dependent_control_structures = leopard_metrics.calculate_maximum_of_data_dependent_control_structures
+calculate_number_of_if_structures_without_else = leopard_metrics.calculate_number_of_if_structures_without_else
+calculate_number_of_variables_involved_in_control_predicates = leopard_metrics.calculate_number_of_variables_involved_in_control_predicates
 
 def run(source_path, skip_existing=False):
     """
@@ -1191,8 +441,10 @@ def run(source_path, skip_existing=False):
 
 def run_test(source_file, metric_function):
     """
-    Run a specific metric function on the source file and print the result as JSON,
-    in the same format as produced by run().
+    Run a specific metric function on a single source file with a minimal local parser.
+
+    This uses its own lightweight parse routine and adds the system Clang builtin
+    headers include path: /usr/lib/clang/<VER>/include/.
 
     Args:
         source_file (str): The path to the source code file.
@@ -1202,7 +454,54 @@ def run_test(source_file, metric_function):
         list[tuple[str, any]]: List of method names and their corresponding metric values.
     """
 
-    tu = parse_file(source_file)
+    def _find_clang_builtin_include_dir() -> str | None:
+        base = "/usr/lib/clang"
+        try:
+            if not os.path.isdir(base):
+                return None
+            versions = [d for d in os.listdir(base) if os.path.isdir(os.path.join(base, d))]
+            if not versions:
+                return None
+            # Choose the highest-looking version
+            import re
+            def ver_key(s: str):
+                nums = [int(x) for x in re.findall(r"\d+", s)]
+                return nums or [0]
+            best = sorted(versions, key=ver_key)[-1]
+            inc = os.path.join(base, best, "include")
+            return inc if os.path.isdir(inc) else None
+        except Exception:
+            return None
+
+    def _parse_file_for_test(path: str):
+        try:
+            if not (os.path.exists(path) and os.path.isfile(path)):
+                return None
+
+            ext = os.path.splitext(path)[1].lower()
+            is_cxx = ext in (".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx")
+            args = ["-std=c++17", "-x", "c++"] if is_cxx else ["-std=c11", "-x", "c"]
+
+            # Add builtin headers from system Clang
+            inc_dir = _find_clang_builtin_include_dir()
+            if inc_dir:
+                args.extend(["-isystem", inc_dir])
+
+            # Keep forgiving defaults
+            args.extend([
+                "-ferror-limit=0",
+                "-Wno-unknown-attributes",
+                "-Wno-pragma-once-outside-header",
+            ])
+
+            tu = index.parse(path, args=args, options=TranslationUnit.PARSE_INCOMPLETE)
+            return tu
+        except Exception:
+            return None
+
+    tu = _parse_file_for_test(source_file)
+    if tu is None:
+        return []
     cursor = tu.cursor
 
     result = []

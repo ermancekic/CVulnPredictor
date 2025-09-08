@@ -78,7 +78,7 @@ def test_number_of_pointer_arithmetic_ops():
     """
     sourceCode = os.path.join(os.getcwd(), "tests", "src", "number_of_pointer_arithmetic_operations.c")
     testResult = calculate_metrics.run_test(sourceCode, calculate_metrics.calculate_number_of_pointer_arithmetic)
-    #print(testResult)
+    print(*[t[1] for t in testResult])  
     trueResult = [3, 2, 2, 2, 2, 0, 1, 1, 2, 2]
 
     
@@ -91,6 +91,7 @@ def test_number_of_variables_involved_in_pointer_arithmetic():
     """
     sourceCode = os.path.join(os.getcwd(), "tests", "src", "number_of_variables_involved_in_pointer_arithmetic.c")
     testResult = calculate_metrics.run_test(sourceCode, calculate_metrics.calculate_number_of_variables_involved_in_pointer_arithmetic)
+    print(*[t[1] for t in testResult])  
     trueResult = [1, 2, 3, 1, 2, 3, 2, 1, 1, 1, 3]
     
     for i in range(len(testResult)):
