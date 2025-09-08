@@ -1,8 +1,0 @@
-[
-  {
-    "id": "OSV-2020-1805",
-    "oss-id": "21329",
-    "introduced_commit": "5087673200af439707dab8ae44c7b567cdabc567",
-    "revision_url": "https://oss-fuzz.com/revisions?job=afl_asan_clamav&range=201903260623:201903270120"
-  }
-]

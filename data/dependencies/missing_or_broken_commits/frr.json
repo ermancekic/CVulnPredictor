@@ -1,8 +1,0 @@
-[
-  {
-    "id": "OSV-2023-764",
-    "oss-id": "61854",
-    "introduced_commit": "f5a2b2f8979d372f7da82558fa04ecf597535c22",
-    "revision_url": "https:\/\/oss-fuzz.com\/revisions?job=libfuzzer_asan_frr&range=202308250611:202308290609"
-  }
-]

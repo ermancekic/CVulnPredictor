@@ -1,8 +1,0 @@
-[
-  {
-    "id": "OSV-2023-152",
-    "oss-id": "56724",
-    "introduced_commit": "736ed83000aee7005d857de3fd5fc175c6c0e373",
-    "revision_url": "https:\/\/oss-fuzz.com\/revisions?job=libfuzzer_asan_wireshark&range=202303050604:202303060613"
-  }
-]

@@ -1,8 +1,0 @@
-[
-  {
-    "id": "OSV-2021-1166",
-    "oss-id": "37536",
-    "introduced_commit": "8e18058117fcf177d236e68d453d04e20f937598",
-    "revision_url": "https:\/\/oss-fuzz.com\/revisions?job=libfuzzer_msan_matio&range=202107120608:202108140607"
-  }
-]
