@@ -70,7 +70,7 @@ except Exception:
 # --- Third‑party imports ------------------------------------------------------
 import ujson as json
 
-# --- Local application imports ----------------------------------------------
+# --- Local application imports ------------------------------------------------
 import modules.calculate_metrics as calc_metrics
 import modules.calculate_results as calc_results
 import modules.retrieve_arvo_table_data as arvo_data
@@ -85,22 +85,25 @@ LOG_DIR = ROOT_DIR / "logs"
 METRICS_ERR_JSON_DIR = LOG_DIR / "metrics_json_errors"
 
 THRESHOLDS = {
-    # "lines of code": -1,
-    # "cyclomatic complexity": -1,
-    # "number of loops": -1,
-    # "number of nested loops": -1,
-    # "max nesting loop depth": -1,
+    "lines of code": -1,
+    "cyclomatic complexity": -1,
+    "number of loops": -1,
+    "number of nested loops": -1,
+    "max nesting loop depth": -1,
     "number of parameter variables": -1,
-    # "number of callee parameter variables": -1,
-    # "number of pointer arithmetic": -1,
-    # "number of variables involved in pointer arithmetic": -1,
-    # "max pointer arithmetic variable is involved in": -1,
-    # "number of nested control structures": -1,
-    # "maximum nesting level of control structures": -1,
-    # "maximum of control dependent control structures": -1,
-    # "maximum of data dependent control structures": -1,
-    # "number of if structures without else": -1,
-    # "number of variables involved in control predicates": -1,
+    "number of callee parameter variables": -1,
+    "number of pointer arithmetic": -1,
+    "number of variables involved in pointer arithmetic": -1,
+    "max pointer arithmetic variable is involved in": -1,
+    "number of nested control structures": -1,
+    "maximum nesting level of control structures": -1,
+    "maximum of control dependent control structures": -1,
+    "maximum of data dependent control structures": -1,
+    "number of if structures without else": -1,
+    "number of variables involved in control predicates": -1,
+    "NumChanges": -1,
+    "LinesChanged": -1,
+    "LinesNew": -1,
 }
 
 
@@ -206,7 +209,7 @@ def run_metrics_for_project(project_path: Path) -> tuple[str, bool]:
 
     try:
         logging.info("Running metrics for %s...", project_dir_name)
-        calc_metrics.run(str(project_path), False)
+        calc_metrics.run(str(project_path), True)
         return project_dir_name, True
 
     except Exception as e:

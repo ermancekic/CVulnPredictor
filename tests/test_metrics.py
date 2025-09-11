@@ -5,6 +5,7 @@ import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
 import modules.calculate_metrics as calculate_metrics
+import modules.metrics.project_metrics as project_metrics
 
 def test_cyclomatic_complexity():
     """
@@ -173,3 +174,30 @@ def test_number_of_variables_involved_in_control_predicates():
     
     for i in range(len(testResult)):
         assert testResult[i][1] == trueResult[i], f"Expected {trueResult[i]} but got {testResult[i][1]} for function {testResult[i][0]}"
+
+
+def test_project_metrics_num_changes():
+    """
+    Test NumChanges (git commit count touching file) using tests/TestWorkspace repo.
+    """
+    file_path = os.path.join(os.getcwd(), "tests", "TestWorkspace", "TestFile.c")
+    value = project_metrics.calculate_num_changes(file_path)
+    assert value == 4, f"Expected 4 commits but got {value} for {file_path}"
+
+
+def test_project_metrics_lines_changed():
+    """
+    Test LinesChanged (added + deleted) using tests/TestWorkspace repo.
+    """
+    file_path = os.path.join(os.getcwd(), "tests", "TestWorkspace", "TestFile.c")
+    value = project_metrics.calculate_lines_changed(file_path)
+    assert value == 17, f"Expected 17 lines changed but got {value} for {file_path}"
+
+
+def test_project_metrics_lines_new():
+    """
+    Test LinesNew (added) using tests/TestWorkspace repo.
+    """
+    file_path = os.path.join(os.getcwd(), "tests", "TestWorkspace", "TestFile.c")
+    value = project_metrics.calculate_lines_new(file_path)
+    assert value == 13, f"Expected 13 new lines but got {value} for {file_path}"

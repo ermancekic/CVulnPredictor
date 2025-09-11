@@ -8,5 +8,6 @@ implementations.
 
 __all__ = [
     "leopard_metrics",
+    "project_metrics",
+    "improving_fuzzing_metrics"
 ]
-

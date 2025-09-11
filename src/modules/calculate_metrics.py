@@ -34,8 +34,9 @@ logging.info(cindex.__file__)
 # Initialize Clang index
 index = cindex.Index.create()
 
-# Import concrete leopard metric implementations
-from .metrics import leopard_metrics
+# Import concrete metric implementations
+from .metrics import leopard_metrics, project_metrics
+from .metrics.improving_fuzzing_metrics import calculate_loc
 DATA_ROOT = os.path.join(os.getcwd(), "data")
 
 def get_method_name(cursor):
@@ -263,38 +264,6 @@ def parse_file(source_file, project_name):
 
     return tu
 
-def calculate_loc(cursor):
-    """
-    Calculate lines of code (excluding comments and blanks) for a function cursor.
-
-    Args:
-        cursor (cindex.Cursor): Clang cursor for the function or method.
-
-    Returns:
-        int: Number of distinct non-comment, non-blank lines in the function body.
-    """
-    tu = cursor.translation_unit
-    # gather all non-comment, non-whitespace tokens in this cursor’s extent
-    tokens = tu.get_tokens(extent=cursor.extent)
-    locLines = set()
-    for tok in tokens:
-        # skip comments
-        if tok.kind == TokenKind.COMMENT:
-            continue
-        
-        # skip any token that is purely whitespace
-        try:
-            text = tok.spelling
-        except Exception as e:
-            continue
-        
-        if not text.strip():
-            continue
-        
-        # record the source line
-        locLines.add(tok.location.line)
-    return len(locLines)
-
 def is_function_like(cursor):
     """
     Check if a cursor represents a function-like declaration (functions, methods, constructors, etc.).
@@ -334,6 +303,58 @@ calculate_maximum_of_control_dependent_control_structures = leopard_metrics.calc
 calculate_maximum_of_data_dependent_control_structures = leopard_metrics.calculate_maximum_of_data_dependent_control_structures
 calculate_number_of_if_structures_without_else = leopard_metrics.calculate_number_of_if_structures_without_else
 calculate_number_of_variables_involved_in_control_predicates = leopard_metrics.calculate_number_of_variables_involved_in_control_predicates
+
+def _iter_function_nodes_in_file(root_cursor, source_file):
+    """Yield only function-like cursors whose location belongs to source_file.
+
+    Traverses only container nodes declared in the same file to avoid
+    descending into included headers. This prunes the AST substantially
+    versus cursor.walk_preorder().
+    """
+    want = os.path.abspath(source_file)
+
+    def _same_file(node) -> bool:
+        loc = getattr(node, "location", None)
+        if loc is None:
+            return False
+        f = getattr(loc, "file", None)
+        if f is None:
+            return False
+        try:
+            return os.path.abspath(f.name) == want
+        except Exception:
+            return False
+
+    containers = {
+        CursorKind.TRANSLATION_UNIT,
+        CursorKind.NAMESPACE,
+        CursorKind.STRUCT_DECL,
+        CursorKind.CLASS_DECL,
+        CursorKind.UNION_DECL,
+        CursorKind.CLASS_TEMPLATE,
+    }
+
+    stack = [root_cursor]
+    while stack:
+        node = stack.pop()
+
+        # Only emit functions that belong to the current source file
+        if is_function_like(node):
+            if _same_file(node):
+                yield node
+            continue  # do not descend into function bodies
+
+        # Descend only through container nodes, and only when they are in the same file
+        if node.kind in containers:
+            # For TU we don't have a meaningful file; select children explicitly
+            for child in node.get_children():
+                if is_function_like(child):
+                    if _same_file(child):
+                        stack.append(child)
+                    continue
+                if child.kind in containers and _same_file(child):
+                    stack.append(child)
+
 
 def run(source_path, skip_existing=False):
     """
@@ -375,67 +396,60 @@ def run(source_path, skip_existing=False):
             continue  # Skip files that failed to parse
         cursor = tu.cursor
 
-        solution[source_file] = {}
+        # Pre-fill file entry with project (git) metrics
+        try:
+            file_proj_metrics = project_metrics.calculate_file_project_metrics(source_file)
+        except Exception:
+            file_proj_metrics = {"NumChanges": 0, "LinesChanged": 0, "LinesNew": 0}
 
-        for c in cursor.walk_preorder():
-            # Skip cursors that come from other files (headers, included sources).
-            # We only want functions defined in the current source_file.
-            loc = getattr(c, 'location', None)
-            if loc is None or getattr(loc, 'file', None) is None:
-                continue
+        solution[source_file] = {"__project_metrics__": file_proj_metrics}
+
+        for c in _iter_function_nodes_in_file(cursor, source_file):
             try:
-                node_file = os.path.abspath(loc.file.name)
-            except Exception:
-                continue
-            if node_file != os.path.abspath(source_file):
-                # cursor originates from an included header or different file
-                continue
-            if is_function_like(c):
-                try:
-                    method_name = get_method_name(c)
-                    # loc = calculate_loc(c)
-                
-                    # Leopard C
-                    # cyclomatic_complexity  = calculate_cyclomatic_complexity(c)
-                    # number_of_loops = calculate_number_of_loops(c)
-                    # number_of_nested_loops = calculate_number_of_nested_loops(c)
-                    # max_nesting_loop_depth = calculate_max_nesting_loop_depth(c)
-                    
-                    # Leopard V
-                    number_of_parameter_variables = calculate_number_of_parameter_variables(c)
-                    # number_of_callee_parameter_variables = calculate_number_of_callee_parameter_variables(c)
-                    # number_of_pointer_arithmetic = calculate_number_of_pointer_arithmetic(c)
-                    # number_of_variables_involved_in_pointer_arithmetic = calculate_number_of_variables_involved_in_pointer_arithmetic(c)
-                    # max_pointer_arithmetic_variable_is_involved_in = calculate_max_pointer_arithmetic_variable_is_involved_in(c)
-                    # number_of_nested_control_structures = calculate_number_of_nested_control_structures(c)
-                    # maximum_nesting_level_of_control_structures = calculate_maximum_nesting_level_of_control_structures(c)
-                    # maximum_of_control_dependent_control_structures = calculate_maximum_of_control_dependent_control_structures(c)
-                    # maximum_of_data_dependent_control_structures = calculate_maximum_of_data_dependent_control_structures(c)
-                    # number_of_if_structures_without_else = calculate_number_of_if_structures_without_else(c)
-                    # number_of_variables_involved_in_control_predicates = calculate_number_of_variables_involved_in_control_predicates(c)
-                except Exception as e:
-                    logging.info(f"Error for {c.displayname} in {source_file}: {e}")
-                    logging.info(f"Stack trace: {traceback.format_exc()}")
-                    continue
+                method_name = get_method_name(c)
+                loc = calculate_loc(c)
 
-                solution[source_file][method_name] = {
-                    # 'lines of code': loc,
-                    # 'cyclomatic complexity': cyclomatic_complexity,
-                    # 'number of loops': number_of_loops,
-                    # 'number of nested loops': number_of_nested_loops,
-                    # 'max nesting loop depth': max_nesting_loop_depth,
-                    'number of parameter variables': number_of_parameter_variables,
-                    # 'number of callee parameter variables': number_of_callee_parameter_variables,
-                    # 'number of pointer arithmetic' : number_of_pointer_arithmetic,
-                    # 'number of variables involved in pointer arithmetic': number_of_variables_involved_in_pointer_arithmetic,
-                    # 'max pointer arithmetic variable is involved in': max_pointer_arithmetic_variable_is_involved_in,
-                    # 'number of nested control structures': number_of_nested_control_structures,
-                    # 'maximum nesting level of control structures': maximum_nesting_level_of_control_structures,
-                    # 'maximum of control dependent control structures': maximum_of_control_dependent_control_structures,
-                    # 'maximum of data dependent control structures': maximum_of_data_dependent_control_structures,
-                    # 'number of if structures without else': number_of_if_structures_without_else,
-                    # 'number of variables involved in control predicates': number_of_variables_involved_in_control_predicates
-                }
+                # Leopard C
+                cyclomatic_complexity  = calculate_cyclomatic_complexity(c)
+                number_of_loops = calculate_number_of_loops(c)
+                number_of_nested_loops = calculate_number_of_nested_loops(c)
+                max_nesting_loop_depth = calculate_max_nesting_loop_depth(c)
+
+                # Leopard V
+                number_of_parameter_variables = calculate_number_of_parameter_variables(c)
+                number_of_callee_parameter_variables = calculate_number_of_callee_parameter_variables(c)
+                number_of_pointer_arithmetic = calculate_number_of_pointer_arithmetic(c)
+                number_of_variables_involved_in_pointer_arithmetic = calculate_number_of_variables_involved_in_pointer_arithmetic(c)
+                max_pointer_arithmetic_variable_is_involved_in = calculate_max_pointer_arithmetic_variable_is_involved_in(c)
+                number_of_nested_control_structures = calculate_number_of_nested_control_structures(c)
+                maximum_nesting_level_of_control_structures = calculate_maximum_nesting_level_of_control_structures(c)
+                maximum_of_control_dependent_control_structures = calculate_maximum_of_control_dependent_control_structures(c)
+                maximum_of_data_dependent_control_structures = calculate_maximum_of_data_dependent_control_structures(c)
+                number_of_if_structures_without_else = calculate_number_of_if_structures_without_else(c)
+                number_of_variables_involved_in_control_predicates = calculate_number_of_variables_involved_in_control_predicates(c)
+            except Exception as e:
+                logging.info(f"Error for {c.displayname} in {source_file}: {e}")
+                logging.info(f"Stack trace: {traceback.format_exc()}")
+                continue
+
+            solution[source_file][method_name] = {
+                'lines of code': loc,
+                'cyclomatic complexity': cyclomatic_complexity,
+                'number of loops': number_of_loops,
+                'number of nested loops': number_of_nested_loops,
+                'max nesting loop depth': max_nesting_loop_depth,
+                'number of parameter variables': number_of_parameter_variables,
+                'number of callee parameter variables': number_of_callee_parameter_variables,
+                'number of pointer arithmetic' : number_of_pointer_arithmetic,
+                'number of variables involved in pointer arithmetic': number_of_variables_involved_in_pointer_arithmetic,
+                'max pointer arithmetic variable is involved in': max_pointer_arithmetic_variable_is_involved_in,
+                'number of nested control structures': number_of_nested_control_structures,
+                'maximum nesting level of control structures': maximum_nesting_level_of_control_structures,
+                'maximum of control dependent control structures': maximum_of_control_dependent_control_structures,
+                'maximum of data dependent control structures': maximum_of_data_dependent_control_structures,
+                'number of if structures without else': number_of_if_structures_without_else,
+                'number of variables involved in control predicates': number_of_variables_involved_in_control_predicates
+            }
                 
     print_json(solution, source_path)
 

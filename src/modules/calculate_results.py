@@ -53,9 +53,28 @@ def separate_and_filter_calculated_metrics(thresholds):
         filtered = defaultdict(lambda: defaultdict(dict))
 
         for file_name, functions in metrics_data.items():
+            # Optionally present: project-level metrics for the whole file
+            project_metrics = {}
+            try:
+                if isinstance(functions, dict):
+                    project_metrics = functions.get("__project_metrics__", {}) or {}
+            except Exception:
+                project_metrics = {}
+
             for func_name, metrics in functions.items():
+                # Skip the container of project-level metrics itself
+                if func_name == "__project_metrics__":
+                    continue
+
+                # Merge: apply project metrics to every function entry
+                merged = {}
+                if isinstance(project_metrics, dict):
+                    merged.update(project_metrics)
+                if isinstance(metrics, dict):
+                    merged.update(metrics)
+
                 # func_name remains fully intact
-                for metric_name, metric_value in metrics.items():
+                for metric_name, metric_value in merged.items():
                     if metric_name in thresholds and metric_value >= thresholds[metric_name]:
                         # only create here once, no repeated makedirs
                         filtered[metric_name][file_name].setdefault(func_name, {})[metric_name] = metric_value
