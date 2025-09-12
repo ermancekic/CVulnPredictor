@@ -3,10 +3,11 @@ project_metrics.py
 
 Git-based project/file history metrics.
 
-Implements three basic metrics per file (tracked with git --follow):
+Implements project/file history metrics per file (tracked with git --follow):
 - NumChanges:  number of commits that touched the file since creation
 - LinesChanged: cumulative added + deleted lines across all touching commits
 - LinesNew:  cumulative added lines across all touching commits
+- NumDevs: number of distinct authors (by email) who touched the file
 
 These functions are imported and called from modules.calculate_metrics.
 """
@@ -90,6 +91,23 @@ def _rel_to_root(repo_root: str, file_path: str) -> str:
         return file_path
 
 
+def _authors_count(repo_root: str, rel_path: str) -> int:
+    """Return number of unique authors (by email, case-insensitive) for a file history.
+
+    Uses `git log --follow` to traverse history across renames and collects `%ae` (author email).
+    Non-empty emails are lowercased and deduplicated.
+    """
+    out = _git_run(repo_root, [
+        "log", "--follow", "--format=%ae", "--", rel_path
+    ])
+    emails = set()
+    for line in out.splitlines():
+        e = (line or "").strip().lower()
+        if e:
+            emails.add(e)
+    return len(emails)
+
+
 def calculate_num_changes(file_path: str) -> int:
     """Number of commits that touched the file since its creation (git --follow)."""
     root = _find_git_root(file_path)
@@ -120,11 +138,20 @@ def calculate_lines_new(file_path: str) -> int:
     return a
 
 
+def calculate_num_devs(file_path: str) -> int:
+    """Number of distinct authors (unique emails) who changed the file."""
+    root = _find_git_root(file_path)
+    if not root:
+        return 0
+    rel = _rel_to_root(root, file_path)
+    return _authors_count(root, rel)
+
+
 def calculate_file_project_metrics(file_path: str) -> dict:
     """Convenience helper returning all three metrics for a file path."""
     return {
         "NumChanges": calculate_num_changes(file_path),
         "LinesChanged": calculate_lines_changed(file_path),
         "LinesNew": calculate_lines_new(file_path),
+        "NumDevs": calculate_num_devs(file_path),
     }
-

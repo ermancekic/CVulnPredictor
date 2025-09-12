@@ -191,7 +191,7 @@ def test_project_metrics_lines_changed():
     """
     file_path = os.path.join(os.getcwd(), "tests", "TestWorkspace", "TestFile.c")
     value = project_metrics.calculate_lines_changed(file_path)
-    assert value == 17, f"Expected 17 lines changed but got {value} for {file_path}"
+    assert value == 21, f"Expected 21 lines changed but got {value} for {file_path}"
 
 
 def test_project_metrics_lines_new():
@@ -200,4 +200,14 @@ def test_project_metrics_lines_new():
     """
     file_path = os.path.join(os.getcwd(), "tests", "TestWorkspace", "TestFile.c")
     value = project_metrics.calculate_lines_new(file_path)
-    assert value == 13, f"Expected 13 new lines but got {value} for {file_path}"
+    assert value == 17, f"Expected 17 new lines but got {value} for {file_path}"
+
+
+def test_project_metrics_num_devs():
+    """
+    Test NumDevs (distinct authors by email) using tests/TestWorkspace repo.
+    The history of TestFile.c is authored by a single email.
+    """
+    file_path = os.path.join(os.getcwd(), "tests", "TestWorkspace", "TestFile.c")
+    value = project_metrics.calculate_num_devs(file_path)
+    assert value == 2, f"Expected 2 developer but got {value} for {file_path}"

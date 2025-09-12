@@ -400,7 +400,7 @@ def run(source_path, skip_existing=False):
         try:
             file_proj_metrics = project_metrics.calculate_file_project_metrics(source_file)
         except Exception:
-            file_proj_metrics = {"NumChanges": 0, "LinesChanged": 0, "LinesNew": 0}
+            file_proj_metrics = {"NumChanges": 0, "LinesChanged": 0, "LinesNew": 0, "NumDevs": 0}
 
         solution[source_file] = {"__project_metrics__": file_proj_metrics}
 
@@ -409,7 +409,7 @@ def run(source_path, skip_existing=False):
                 method_name = get_method_name(c)
                 loc = calculate_loc(c)
 
-                # Leopard C
+                # # Leopard C
                 cyclomatic_complexity  = calculate_cyclomatic_complexity(c)
                 number_of_loops = calculate_number_of_loops(c)
                 number_of_nested_loops = calculate_number_of_nested_loops(c)

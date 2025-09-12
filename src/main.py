@@ -104,6 +104,7 @@ THRESHOLDS = {
     "NumChanges": -1,
     "LinesChanged": -1,
     "LinesNew": -1,
+    "NumDevs": -1,
 }
 
 

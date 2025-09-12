@@ -51,3 +51,14 @@ In this project, we will examine the open‑source projects enrolled in OSS‑Fu
   - Counting of all if-blocks without associated else
 - **Number of Variables in Control Predicates**
   - Number of variables used in the conditions (predicates) of control structures
+
+# Project/Git Metrics
+
+- **NumChanges**
+  - Number of commits that touched a file (git log --follow)
+- **LinesChanged**
+  - Cumulative lines added + deleted across the file's history
+- **LinesNew**
+  - Cumulative lines added across the file's history
+- **NumDevs**
+  - Number of distinct authors (by email) who changed the file
