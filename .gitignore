@@ -8,18 +8,7 @@ __pycache__/
 .vscode/
 
 # data and repositories directories
-data/metrics/
-data/single-metrics/
-data/found-methods/
-data/debug_reports/
-data/not-found-methods/
-data/vulns/
-data/general/
-data/includes/
-data/missing_commits
-data/stubs/
-data/stacktraces
-data/arvo-projects
+data/
 repositories/
 ARVO/
 arvo.db

@@ -15,6 +15,7 @@ import traceback
 import re
 import shutil
 import hashlib
+import time
 
 clang_path   = os.path.abspath(os.path.join(os.getcwd(), "llvm-project-llvmorg-20.1.8", "clang", "bindings", "python"))
 logging.info(f"clang_path: {clang_path}")
@@ -372,6 +373,47 @@ def run(source_path, skip_existing=False):
 
     # solution = Dict[FileName -> Dict[MethodName -> MetricsStats]]
     solution = {}
+    # timings = Dict[MetricKey -> List[Entry]]
+    # Entry for function-level metric: {file, method, seconds}
+    # Entry for file-level metric: {file, seconds}
+    timings = {}
+
+    def add_timing(metric_key: str, entry: dict):
+        key = metric_key.strip()
+        if not key:
+            return
+        timings.setdefault(key, []).append(entry)
+
+    def write_timings():
+        times_dir = os.path.join(os.getcwd(), "data", "times")
+        os.makedirs(times_dir, exist_ok=True)
+
+        def _slug_name(name: str) -> str:
+            return re.sub(r"[^0-9A-Za-z_]+", "_", name).strip("_") or "metric"
+
+        for metric_key, entries in timings.items():
+            # Persist only the times as a flat array, aggregated across runs
+            times_only = [float(e.get("seconds", 0.0)) for e in entries]
+            fname = f"{_slug_name(metric_key)}.json"
+            out_path = os.path.join(times_dir, fname)
+            try:
+                # Load existing times and extend
+                existing: list[float] = []
+                if os.path.exists(out_path):
+                    try:
+                        with open(out_path, "r", encoding="utf-8") as rf:
+                            data = json.load(rf)
+                            if isinstance(data, list):
+                                existing = [float(x) for x in data]
+                    except Exception:
+                        existing = []
+                merged = existing + times_only
+                with open(out_path, "w", encoding="utf-8") as f:
+                    json_str = json.dumps(merged, indent=2, ensure_ascii=False)
+                    json_str = json_str.replace('\\/', '/')
+                    f.write(json_str)
+            except Exception as e:
+                logging.info(f"Failed to write timing file {out_path}: {e}")
 
     source_files = get_source_files(source_path)
 
@@ -396,37 +438,95 @@ def run(source_path, skip_existing=False):
             continue  # Skip files that failed to parse
         cursor = tu.cursor
 
-        # Pre-fill file entry with project (git) metrics
+        # Pre-fill file entry with project (git) metrics, timed individually
+        vals = {"NumChanges": 0, "LinesChanged": 0, "LinesNew": 0, "NumDevs": 0}
+        # NumChanges
         try:
-            file_proj_metrics = project_metrics.calculate_file_project_metrics(source_file)
+            t0 = time.perf_counter(); vals["NumChanges"] = project_metrics.calculate_num_changes(source_file); t1 = time.perf_counter()
+            add_timing("NumChanges", {"seconds": max(0.0, t1 - t0)})
         except Exception:
-            file_proj_metrics = {"NumChanges": 0, "LinesChanged": 0, "LinesNew": 0, "NumDevs": 0}
+            vals["NumChanges"] = 0
+        # LinesChanged
+        try:
+            t0 = time.perf_counter(); vals["LinesChanged"] = project_metrics.calculate_lines_changed(source_file); t1 = time.perf_counter()
+            add_timing("LinesChanged", {"seconds": max(0.0, t1 - t0)})
+        except Exception:
+            vals["LinesChanged"] = 0
+        # LinesNew
+        try:
+            t0 = time.perf_counter(); vals["LinesNew"] = project_metrics.calculate_lines_new(source_file); t1 = time.perf_counter()
+            add_timing("LinesNew", {"seconds": max(0.0, t1 - t0)})
+        except Exception:
+            vals["LinesNew"] = 0
+        # NumDevs
+        try:
+            t0 = time.perf_counter(); vals["NumDevs"] = project_metrics.calculate_num_devs(source_file); t1 = time.perf_counter()
+            add_timing("NumDevs", {"seconds": max(0.0, t1 - t0)})
+        except Exception:
+            vals["NumDevs"] = 0
+
+        file_proj_metrics = vals
 
         solution[source_file] = {"__project_metrics__": file_proj_metrics}
 
         for c in _iter_function_nodes_in_file(cursor, source_file):
             try:
                 method_name = get_method_name(c)
-                loc = calculate_loc(c)
+
+                # LOC
+                t0 = time.perf_counter(); loc = calculate_loc(c); t1 = time.perf_counter()
+                add_timing("lines of code", {
+                    "file": source_file,
+                    "method": method_name,
+                    "seconds": max(0.0, t1 - t0),
+                })
 
                 # # Leopard C
-                cyclomatic_complexity  = calculate_cyclomatic_complexity(c)
-                number_of_loops = calculate_number_of_loops(c)
-                number_of_nested_loops = calculate_number_of_nested_loops(c)
-                max_nesting_loop_depth = calculate_max_nesting_loop_depth(c)
+                t0 = time.perf_counter(); cyclomatic_complexity  = calculate_cyclomatic_complexity(c); t1 = time.perf_counter()
+                add_timing("cyclomatic complexity", {"file": source_file, "method": method_name, "seconds": max(0.0, t1 - t0)})
 
-                # Leopard V
-                number_of_parameter_variables = calculate_number_of_parameter_variables(c)
-                number_of_callee_parameter_variables = calculate_number_of_callee_parameter_variables(c)
-                number_of_pointer_arithmetic = calculate_number_of_pointer_arithmetic(c)
-                number_of_variables_involved_in_pointer_arithmetic = calculate_number_of_variables_involved_in_pointer_arithmetic(c)
-                max_pointer_arithmetic_variable_is_involved_in = calculate_max_pointer_arithmetic_variable_is_involved_in(c)
-                number_of_nested_control_structures = calculate_number_of_nested_control_structures(c)
-                maximum_nesting_level_of_control_structures = calculate_maximum_nesting_level_of_control_structures(c)
-                maximum_of_control_dependent_control_structures = calculate_maximum_of_control_dependent_control_structures(c)
-                maximum_of_data_dependent_control_structures = calculate_maximum_of_data_dependent_control_structures(c)
-                number_of_if_structures_without_else = calculate_number_of_if_structures_without_else(c)
-                number_of_variables_involved_in_control_predicates = calculate_number_of_variables_involved_in_control_predicates(c)
+                t0 = time.perf_counter(); number_of_loops = calculate_number_of_loops(c); t1 = time.perf_counter()
+                add_timing("number of loops", {"file": source_file, "method": method_name, "seconds": max(0.0, t1 - t0)})
+
+                t0 = time.perf_counter(); number_of_nested_loops = calculate_number_of_nested_loops(c); t1 = time.perf_counter()
+                add_timing("number of nested loops", {"file": source_file, "method": method_name, "seconds": max(0.0, t1 - t0)})
+
+                t0 = time.perf_counter(); max_nesting_loop_depth = calculate_max_nesting_loop_depth(c); t1 = time.perf_counter()
+                add_timing("max nesting loop depth", {"file": source_file, "method": method_name, "seconds": max(0.0, t1 - t0)})
+
+                # # Leopard V
+                t0 = time.perf_counter(); number_of_parameter_variables = calculate_number_of_parameter_variables(c); t1 = time.perf_counter()
+                add_timing("number of parameter variables", {"file": source_file, "method": method_name, "seconds": max(0.0, t1 - t0)})
+
+                t0 = time.perf_counter(); number_of_callee_parameter_variables = calculate_number_of_callee_parameter_variables(c); t1 = time.perf_counter()
+                add_timing("number of callee parameter variables", {"file": source_file, "method": method_name, "seconds": max(0.0, t1 - t0)})
+
+                t0 = time.perf_counter(); number_of_pointer_arithmetic = calculate_number_of_pointer_arithmetic(c); t1 = time.perf_counter()
+                add_timing("number of pointer arithmetic", {"file": source_file, "method": method_name, "seconds": max(0.0, t1 - t0)})
+
+                t0 = time.perf_counter(); number_of_variables_involved_in_pointer_arithmetic = calculate_number_of_variables_involved_in_pointer_arithmetic(c); t1 = time.perf_counter()
+                add_timing("number of variables involved in pointer arithmetic", {"file": source_file, "method": method_name, "seconds": max(0.0, t1 - t0)})
+
+                t0 = time.perf_counter(); max_pointer_arithmetic_variable_is_involved_in = calculate_max_pointer_arithmetic_variable_is_involved_in(c); t1 = time.perf_counter()
+                add_timing("max pointer arithmetic variable is involved in", {"file": source_file, "method": method_name, "seconds": max(0.0, t1 - t0)})
+
+                t0 = time.perf_counter(); number_of_nested_control_structures = calculate_number_of_nested_control_structures(c); t1 = time.perf_counter()
+                add_timing("number of nested control structures", {"file": source_file, "method": method_name, "seconds": max(0.0, t1 - t0)})
+
+                t0 = time.perf_counter(); maximum_nesting_level_of_control_structures = calculate_maximum_nesting_level_of_control_structures(c); t1 = time.perf_counter()
+                add_timing("maximum nesting level of control structures", {"file": source_file, "method": method_name, "seconds": max(0.0, t1 - t0)})
+
+                t0 = time.perf_counter(); maximum_of_control_dependent_control_structures = calculate_maximum_of_control_dependent_control_structures(c); t1 = time.perf_counter()
+                add_timing("maximum of control dependent control structures", {"file": source_file, "method": method_name, "seconds": max(0.0, t1 - t0)})
+
+                t0 = time.perf_counter(); maximum_of_data_dependent_control_structures = calculate_maximum_of_data_dependent_control_structures(c); t1 = time.perf_counter()
+                add_timing("maximum of data dependent control structures", {"file": source_file, "method": method_name, "seconds": max(0.0, t1 - t0)})
+
+                t0 = time.perf_counter(); number_of_if_structures_without_else = calculate_number_of_if_structures_without_else(c); t1 = time.perf_counter()
+                add_timing("number of if structures without else", {"file": source_file, "method": method_name, "seconds": max(0.0, t1 - t0)})
+
+                t0 = time.perf_counter(); number_of_variables_involved_in_control_predicates = calculate_number_of_variables_involved_in_control_predicates(c); t1 = time.perf_counter()
+                add_timing("number of variables involved in control predicates", {"file": source_file, "method": method_name, "seconds": max(0.0, t1 - t0)})
             except Exception as e:
                 logging.info(f"Error for {c.displayname} in {source_file}: {e}")
                 logging.info(f"Stack trace: {traceback.format_exc()}")
@@ -452,6 +552,11 @@ def run(source_path, skip_existing=False):
             }
                 
     print_json(solution, source_path)
+    # Write per-metric timing JSONs under data/times (one file per metric type)
+    try:
+        write_timings()
+    except Exception as e:
+        logging.info(f"Failed to write timings: {e}")
 
 def run_test(source_file, metric_function):
     """

@@ -18,8 +18,11 @@ import multiprocessing as mp
 from pathlib import Path
 import os
 import traceback
+import time
 
 # Configure minimal console logging early so that imports below can log visibly.
+# Record start time as early as possible to include import overhead.
+_MAIN_START_PERF = time.perf_counter()
 def _parse_level(val: str | int | None) -> int:
     if isinstance(val, int):
         return val
@@ -69,6 +72,38 @@ except Exception:
 
 # --- Third‑party imports ------------------------------------------------------
 import ujson as json
+
+# --- Utilities: write main runtime ------------------------------------------
+def _write_main_runtime(seconds: float) -> None:
+    """Append the total runtime (seconds) to data/times/main.json.
+
+    Keeps a list of floats, consistent with other timing JSONs under data/times.
+    """
+    try:
+        # Resolve project root from this file location: src/ -> project root
+        root = Path(__file__).resolve().parent.parent
+        times_dir = root / "data" / "times"
+        times_dir.mkdir(parents=True, exist_ok=True)
+        out_path = times_dir / "main.json"
+
+        existing: list[float] = []
+        if out_path.exists():
+            try:
+                with out_path.open("r", encoding="utf-8") as rf:
+                    data = json.load(rf)
+                    if isinstance(data, list):
+                        existing = [float(x) for x in data]
+            except Exception:
+                existing = []
+
+        existing.append(float(seconds))
+
+        with out_path.open("w", encoding="utf-8") as f:
+            json_str = json.dumps(existing, indent=2, ensure_ascii=False)
+            json_str = json_str.replace('\\/', '/')
+            f.write(json_str)
+    except Exception as e:
+        logging.info(f"Failed to write main runtime: {e}")
 
 # --- Local application imports ------------------------------------------------
 import modules.calculate_metrics as calc_metrics
@@ -294,4 +329,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        # Measure total wall-clock runtime and persist to data/times/main.json
+        duration = max(0.0, time.perf_counter() - _MAIN_START_PERF)
+        _write_main_runtime(duration)
