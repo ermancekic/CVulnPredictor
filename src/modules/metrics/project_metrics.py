@@ -17,8 +17,10 @@ from __future__ import annotations
 import os
 import subprocess
 from typing import Tuple
+from functools import lru_cache
 
 
+@lru_cache(maxsize=8192)
 def _find_git_root(path: str) -> str | None:
     """Return the repository root (dir containing .git) for a given file/dir path.
 
@@ -51,6 +53,7 @@ def _git_run(repo_root: str, args: list[str]) -> str:
     return result.stdout or ""
 
 
+@lru_cache(maxsize=131072)
 def _numstat_totals(repo_root: str, rel_path: str) -> Tuple[int, int, int]:
     """Return (num_changes, total_added, total_deleted) for file history.
 
@@ -84,6 +87,7 @@ def _numstat_totals(repo_root: str, rel_path: str) -> Tuple[int, int, int]:
     return commit_count, total_added, total_deleted
 
 
+@lru_cache(maxsize=131072)
 def _rel_to_root(repo_root: str, file_path: str) -> str:
     try:
         return os.path.relpath(os.path.abspath(file_path), repo_root)
@@ -91,6 +95,7 @@ def _rel_to_root(repo_root: str, file_path: str) -> str:
         return file_path
 
 
+@lru_cache(maxsize=131072)
 def _authors_count(repo_root: str, rel_path: str) -> int:
     """Return number of unique authors (by email, case-insensitive) for a file history.
 

@@ -32,7 +32,7 @@ except Exception:  # pragma: no cover
 
 
 LOG = logging.getLogger(__name__)
-DEFAULT_MAX_WORKERS = 32
+DEFAULT_MAX_WORKERS = 12
 
 
 def _run(cmd: List[str], *, check: bool = True, capture_output: bool = False) -> subprocess.CompletedProcess:

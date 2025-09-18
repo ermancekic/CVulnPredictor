@@ -120,26 +120,26 @@ LOG_DIR = ROOT_DIR / "logs"
 METRICS_ERR_JSON_DIR = LOG_DIR / "metrics_json_errors"
 
 THRESHOLDS = {
-    "lines of code": -1,
-    "cyclomatic complexity": -1,
-    "number of loops": -1,
-    "number of nested loops": -1,
-    "max nesting loop depth": -1,
-    "number of parameter variables": -1,
-    "number of callee parameter variables": -1,
-    "number of pointer arithmetic": -1,
-    "number of variables involved in pointer arithmetic": -1,
-    "max pointer arithmetic variable is involved in": -1,
-    "number of nested control structures": -1,
-    "maximum nesting level of control structures": -1,
-    "maximum of control dependent control structures": -1,
-    "maximum of data dependent control structures": -1,
-    "number of if structures without else": -1,
-    "number of variables involved in control predicates": -1,
-    "NumChanges": -1,
-    "LinesChanged": -1,
-    "LinesNew": -1,
-    "NumDevs": -1,
+    "lines of code": 0,
+    "cyclomatic complexity": 0,
+    "number of loops": 0,
+    "number of nested loops": 0,
+    "max nesting loop depth": 0,
+    "number of parameter variables": 0,
+    "number of callee parameter variables": 0,
+    "number of pointer arithmetic": 0,
+    "number of variables involved in pointer arithmetic": 0,
+    "max pointer arithmetic variable is involved in": 0,
+    "number of nested control structures": 0,
+    "maximum nesting level of control structures": 0,
+    "maximum of control dependent control structures": 0,
+    "maximum of data dependent control structures": 0,
+    "number of if structures without else": 0,
+    "number of variables involved in control predicates": 0,
+    "NumChanges": 0,
+    "LinesChanged": 0,
+    "LinesNew": 0,
+    "NumDevs": 0,
 }
 
 
@@ -306,9 +306,18 @@ def main() -> None:
                 logging.warning("Repo directory missing: %s – skipping %s", repo_dir, entry.name)
 
     # Calculate metrics in parallel
-    max_workers = mp.cpu_count() * 3
+    # Avoid CPU oversubscription (libclang parsing is CPU-bound)
+    env_workers = os.getenv("METRICS_WORKERS")
+    if env_workers and str(env_workers).isdigit():
+        max_workers = max(1, int(env_workers))
+    else:
+        max_workers = min(len(projects) or 1, max(1, mp.cpu_count()))
     successes = 0
     failures = 0
+
+    if not projects:
+        logging.warning("No repositories discovered under %s", REPOSITORIES_DIR)
+        return
 
     with ProcessPoolExecutor(max_workers=max_workers) as pool:
         futures = [pool.submit(run_metrics_for_project, p) for p in projects]
@@ -324,9 +333,57 @@ def main() -> None:
     logging.info("Metric runs finished. Successes: %d | Failures: %d", successes, failures)
 
     # Final result calculations
+    calc_results.calculate_average_and_median_times()
+
     calc_results.separate_and_filter_calculated_metrics(THRESHOLDS)
     calc_results.check_if_function_in_vulns()
+    calc_results.delete_not_found_vulns_from_result()
+    calc_results.delete_not_found_vulns_from_metrics_dir()
+    calc_results.calculate_total_number_of_methods()
+    calc_results.calculate_code_coverage()
+    calc_results.calculate_lift()
+    calc_results.save_result_state()
 
+    finished = False
+
+    while not finished:
+        increments = {
+            "lines of code": 5,
+            "cyclomatic complexity": 1,
+            "number of loops": 1,
+            "number of nested loops": 1,
+            "max nesting loop depth": 1,
+            "number of parameter variables": 1,
+            "number of callee parameter variables": 1,
+            "number of pointer arithmetic": 1,
+            "number of variables involved in pointer arithmetic": 1,
+            "max pointer arithmetic variable is involved in": 1,
+            "number of nested control structures": 1,
+            "maximum nesting level of control structures": 1,
+            "maximum of control dependent control structures": 1,
+            "maximum of data dependent control structures": 1,
+            "number of if structures without else": 1,
+            "number of variables involved in control predicates": 2,
+            "NumChanges": 1,
+            "LinesChanged": 25,
+            "LinesNew": 25,
+            "NumDevs": 1,
+        }
+        for key in THRESHOLDS:
+            THRESHOLDS[key] += increments.get(key, 0)
+
+        calc_results.separate_and_filter_calculated_metrics(THRESHOLDS)
+        calc_results.check_if_function_in_vulns(True)
+        calc_results.calculate_total_number_of_methods()
+        calc_results.calculate_code_coverage()
+        calc_results.calculate_lift()
+        finished = calc_results.save_result_state()
+
+    # Plots for each metric: x=threshold, y=lift
+    try:
+        calc_results.plot_graphs()
+    except Exception as e:
+        logging.info(f"plot_graphs failed: {e}")
 
 if __name__ == "__main__":
     try:

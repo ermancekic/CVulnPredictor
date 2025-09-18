@@ -40,6 +40,40 @@ from .metrics import leopard_metrics, project_metrics
 from .metrics.improving_fuzzing_metrics import calculate_loc
 DATA_ROOT = os.path.join(os.getcwd(), "data")
 
+# Precompiled patterns and small caches to reduce per-file overhead
+INCLUDE_RE = re.compile(r'#\s*include\s*([<"])([^">]+)[">]')
+
+# Cache for include lists per project to avoid re-reading JSON for every file
+_INC_CACHE: dict[str, dict] = {}
+
+def _get_project_includes(project_name: str) -> tuple[list[str], dict[str, set[str]]]:
+    """Return (headers, base_index) for a project, cached.
+
+    - headers: list of absolute header file paths
+    - base_index: basename -> set of directories containing that header
+    """
+    cached = _INC_CACHE.get(project_name)
+    if cached is not None:
+        return cached.get("headers", []), cached.get("base_index", {})
+
+    headers: list[str] = []
+    base_index: dict[str, set[str]] = {}
+    proj_file = os.path.join(DATA_ROOT, 'includes', f"{project_name}.json")
+    if os.path.exists(proj_file):
+        try:
+            with open(proj_file, 'r', encoding='utf-8') as f:
+                headers = json.load(f) or []
+            for h in headers:
+                b = os.path.basename(h)
+                base_index.setdefault(b, set()).add(os.path.dirname(h))
+        except Exception as e:
+            logging.info(f"Fehler beim Laden von Include-Pfaden {proj_file}: {e}")
+            headers = []
+            base_index = {}
+
+    _INC_CACHE[project_name] = {"headers": headers, "base_index": base_index}
+    return headers, base_index
+
 def get_method_name(cursor):
     """
     Return the display name of a method cursor.
@@ -110,7 +144,11 @@ def get_source_files(source_path, *, skip_dirs=None):
     # Standardmäßig noisy/verursachende Ordner ausschließen
     default_skips = {
         'internal', 'third_party', 'thirdparty', 'tests', 'test',
-        'googletest', 'gtest', 'benchmark', 'benchmarks', 'examples', 'tools'
+        'googletest', 'gtest', 'benchmark', 'benchmarks', 'examples', 'tools',
+        # Common build/output/vendor dirs
+        'build', 'out', 'bin', 'obj', 'lib', 'CMakeFiles',
+        'cmake-build-debug', 'cmake-build-release', 'Debug', 'Release',
+        'node_modules', 'dist', 'vendor', '.git'
     }
     skip_dirs = set(skip_dirs or []) | default_skips
 
@@ -177,12 +215,11 @@ def parse_file(source_file, project_name):
         args = ['-std=c++17', '-x', 'c++'] if is_cxx else ['-std=c11', '-x', 'c']
 
         # Includes im File scannen
-        include_pattern = re.compile(r'#\s*include\s*([<"])([^">]+)[">]')
         include_names = set()
         try:
             with open(source_file, 'r', encoding='utf-8', errors='ignore') as src_f:
                 for line in src_f:
-                    m = include_pattern.search(line)
+                    m = INCLUDE_RE.search(line)
                     if m:
                         inc = m.group(2)
                         include_names.add(inc)
@@ -191,14 +228,7 @@ def parse_file(source_file, project_name):
 
         # Project includes
         includes_dir = _data_path('includes')
-        headers = []
-        proj_file = os.path.join(includes_dir, f"{project_name}.json")
-        if os.path.exists(proj_file):
-            try:
-                with open(proj_file, 'r', encoding='utf-8') as f:
-                    headers.extend(json.load(f))
-            except Exception as e:
-                logging.info(f"Fehler beim Laden von Include-Pfaden {proj_file}: {e}")
+        headers, base_index = _get_project_includes(project_name)
 
         # Pfadbewusstes Matching der echten Header → richtige Include-Roots ableiten
         missing = []
@@ -226,10 +256,10 @@ def parse_file(source_file, project_name):
 
             # 2) Fallback: nur Basename (für Fälle ohne Unterordner im Include)
             base = os.path.basename(inc_name)
-            base_matches = [h for h in headers if os.path.basename(h) == base]
-            if base_matches:
-                for h in base_matches:
-                    include_roots.add(os.path.dirname(h))
+            dirs = base_index.get(base)
+            if dirs:
+                for d in dirs:
+                    include_roots.add(d)
             else:
                 missing.append(inc_name)
 

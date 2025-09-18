@@ -7,16 +7,95 @@ and compute summary statistics for vulnerabilities discovered by metrics.
 """
 
 import glob
-import ujson as json
+try:
+    import ujson as json
+except Exception:  # Fallback, if ujson is not available
+    import json  # type: ignore[no-redef]
 import os
 import logging
 import shutil
 from pathlib import Path
 from collections import defaultdict
+from statistics import median
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import multiprocessing as mp
+
+def _separate_worker(args):
+    """Worker to process a single metrics JSON file and write filtered single-metrics.
+
+    Args:
+        args: tuple(input_path, thresholds, single_metrics_dir)
+
+    Returns:
+        tuple(file_name, ok)
+    """
+    input_path, thresholds, single_metrics_dir = args
+    entry = os.path.basename(input_path)
+    try:
+        with open(input_path, 'r', encoding='utf-8') as f:
+            metrics_data = json.load(f)
+    except Exception as e:
+        logging.info(f"Fehler beim Lesen von {input_path}: {e}")
+        return (entry, False)
+
+    # Collection structure: metric_name -> file_name -> function_name -> {metric_name: value}
+    filtered = defaultdict(lambda: defaultdict(dict))
+
+    for file_name, functions in (metrics_data.items() if isinstance(metrics_data, dict) else []):
+        # Optionally present: project-level metrics for the whole file
+        project_metrics = {}
+        try:
+            if isinstance(functions, dict):
+                project_metrics = functions.get("__project_metrics__", {}) or {}
+        except Exception:
+            project_metrics = {}
+
+        if not isinstance(functions, dict):
+            continue
+
+        for func_name, metrics in functions.items():
+            # Skip the container of project-level metrics itself
+            if func_name == "__project_metrics__":
+                continue
+
+            # Merge: apply project metrics to every function entry
+            merged = {}
+            if isinstance(project_metrics, dict):
+                merged.update(project_metrics)
+            if isinstance(metrics, dict):
+                merged.update(metrics)
+
+            # func_name remains fully intact
+            for metric_name, metric_value in merged.items():
+                try:
+                    if metric_name in thresholds and metric_value >= thresholds[metric_name]:
+                        filtered[metric_name][file_name].setdefault(func_name, {})[metric_name] = metric_value
+                except Exception:
+                    # Be defensive about unexpected types
+                    continue
+
+    # Now write exactly one file per metric folder
+    for metric_name, file_dict in filtered.items():
+        out_dir = os.path.join(single_metrics_dir, metric_name)
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+        except Exception:
+            pass
+        out_path = os.path.join(out_dir, entry)
+        try:
+            with open(out_path, 'w', encoding='utf-8') as f_out:
+                json.dump(file_dict, f_out, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logging.info(f"Fehler beim Schreiben von {out_path}: {e}")
+
+    return (entry, True)
+
 
 def separate_and_filter_calculated_metrics(thresholds):
     """
     Separate and filter calculated metrics into individual JSON files per metric.
+    Additionally, write the used threshold per metric to data/general/result.json
+    under the key "threshold".
 
     Args:
         thresholds (dict): Mapping of metric names to minimum threshold values.
@@ -28,6 +107,8 @@ def separate_and_filter_calculated_metrics(thresholds):
     base = os.getcwd()
     metrics_dir = os.path.join(base, "data", "metrics")
     single_metrics_dir = os.path.join(base, "data", "single-metrics")
+    general_dir = os.path.join(base, "data", "general")
+    os.makedirs(general_dir, exist_ok=True)
 
     # Complete cleanup of output directories
     if os.path.exists(single_metrics_dir):
@@ -38,56 +119,57 @@ def separate_and_filter_calculated_metrics(thresholds):
     for metric_name in thresholds:
         os.makedirs(os.path.join(single_metrics_dir, metric_name), exist_ok=True)
 
-    # For each input file (project/commit), read and filter once
-    for entry in os.listdir(metrics_dir):
-        input_path = os.path.join(metrics_dir, entry)
+    # Prepare inputs
+    entries = list(os.listdir(metrics_dir)) if os.path.isdir(metrics_dir) else []
+    inputs = [os.path.join(metrics_dir, e) for e in entries]
+
+    # Run workers in parallel per input file
+    if inputs:
+        env_workers = os.getenv("SEPARATE_WORKERS")
+        if env_workers and str(env_workers).isdigit():
+            max_workers = max(1, int(env_workers))
+        else:
+            max_workers = min(len(inputs), max(1, mp.cpu_count()))
+
+        tasks = [(p, thresholds, single_metrics_dir) for p in inputs]
+        completed = 0
+        with ProcessPoolExecutor(max_workers=max_workers) as pool:
+            futs = [pool.submit(_separate_worker, t) for t in tasks]
+            for fut in as_completed(futs):
+                try:
+                    _entry, ok = fut.result()
+                    completed += int(ok)
+                except Exception as e:
+                    logging.info(f"Worker failed: {e}")
+        logging.info(f"Separated and filtered {completed}/{len(inputs)} metrics files in parallel")
+    else:
+        logging.info(f"No metrics files found in {metrics_dir}")
+
+    # Update data/general/result.json with the thresholds used per metric
+    result_path = os.path.join(general_dir, "result.json")
+    try:
         try:
-            with open(input_path, 'r', encoding='utf-8') as f:
-                metrics_data = json.load(f)
-            logging.info(f"Processing file: {entry}")
-        except Exception as e:
-            logging.info(f"Fehler beim Lesen von {input_path}: {e}")
-            continue
+            with open(result_path, 'r', encoding='utf-8') as rf:
+                result_data = json.load(rf)
+        except Exception:
+            result_data = {}
 
-        # Collection structure: metric_name -> file_name -> function_name -> {metric_name: value}
-        filtered = defaultdict(lambda: defaultdict(dict))
+        if not isinstance(result_data, dict):
+            result_data = {}
 
-        for file_name, functions in metrics_data.items():
-            # Optionally present: project-level metrics for the whole file
-            project_metrics = {}
-            try:
-                if isinstance(functions, dict):
-                    project_metrics = functions.get("__project_metrics__", {}) or {}
-            except Exception:
-                project_metrics = {}
+        for metric_name, value in thresholds.items():
+            entry = result_data.get(metric_name)
+            if not isinstance(entry, dict):
+                entry = {}
+            # store the exact numeric threshold used for filtering
+            entry["threshold"] = value
+            result_data[metric_name] = entry
 
-            for func_name, metrics in functions.items():
-                # Skip the container of project-level metrics itself
-                if func_name == "__project_metrics__":
-                    continue
-
-                # Merge: apply project metrics to every function entry
-                merged = {}
-                if isinstance(project_metrics, dict):
-                    merged.update(project_metrics)
-                if isinstance(metrics, dict):
-                    merged.update(metrics)
-
-                # func_name remains fully intact
-                for metric_name, metric_value in merged.items():
-                    if metric_name in thresholds and metric_value >= thresholds[metric_name]:
-                        # only create here once, no repeated makedirs
-                        filtered[metric_name][file_name].setdefault(func_name, {})[metric_name] = metric_value
-
-        # Now write exactly one file per metric folder
-        for metric_name, file_dict in filtered.items():
-            out_dir = os.path.join(single_metrics_dir, metric_name)
-            out_path = os.path.join(out_dir, entry)
-            try:
-                with open(out_path, 'w', encoding='utf-8') as f_out:
-                    json.dump(file_dict, f_out, indent=2, ensure_ascii=False)
-            except Exception as e:
-                logging.info(f"Fehler beim Schreiben von {out_path}: {e}")
+        with open(result_path, 'w', encoding='utf-8') as wf:
+            json.dump(result_data, wf, indent=2, ensure_ascii=False)
+        logging.info(f"Thresholds saved to {result_path}")
+    except Exception as e:
+        logging.info(f"Error writing thresholds to result file {result_path}: {e}")
 
 def _strip_templates(s: str) -> str:
     """
@@ -302,11 +384,13 @@ def _normalize_loc_path(p: str) -> str:
     # Reassemble
     return "/".join(parts)
 
-def check_if_function_in_vulns():
+def check_if_function_in_vulns(skip_set_total: bool = False):
     """
     Identify functions from single-metrics that match known vulnerabilities and write results.
     Path comparison uses a normalized vulnerability file (.. and before cut off),
     function comparison uses only the bare function name (without namespace).
+    If skip_set_total is True, do not overwrite "total_vulns" in data/general/result.json
+    (only update "found_vulns").
     """
     base = os.getcwd()
     metrics_dir = os.path.join(base, "data", "single-metrics")
@@ -487,13 +571,683 @@ def check_if_function_in_vulns():
             result_data = {}
 
         for metric, counters in metric_counters.items():
-            result_data[metric] = {
-                "total_vulns": counters["total_vulns"],
-                "found_vulns": counters["found_vulns"]
-            }
+            # Preserve existing entry if present
+            current = result_data.get(metric)
+            if not isinstance(current, dict):
+                current = {}
+
+            # Always update found_vulns
+            current["found_vulns"] = counters["found_vulns"]
+
+            # Optionally set total_vulns (unless skipping per flag)
+            if not skip_set_total:
+                current["total_vulns"] = counters["total_vulns"]
+
+            result_data[metric] = current
 
         with open(result_path, 'w', encoding='utf-8') as wf:
             json.dump(result_data, wf, indent=2, ensure_ascii=False)
         logging.info(f"Metric results written to {result_path}")
     except Exception as e:
         logging.info(f"Error writing result file {result_path}: {e}")
+
+
+def calculate_average_and_median_times() -> dict:
+    """
+    Scan all JSON files under data/times where each file contains a list of
+    timing values (seconds) for one metric and compute the average and median
+    per metric. Writes a single consolidated JSON to data/general/times_summary.json.
+
+    Returns:
+        dict: Mapping of metric (filename stem) -> {"average": float, "median": float}
+    """
+    base = os.getcwd()
+    times_dir = os.path.join(base, "data", "times")
+    out_dir = os.path.join(base, "data", "general")
+    os.makedirs(out_dir, exist_ok=True)
+
+    summary: dict[str, dict[str, float]] = {}
+
+    if not os.path.isdir(times_dir):
+        # Nothing to do
+        out_path = os.path.join(out_dir, "times_summary.json")
+        try:
+            with open(out_path, 'w', encoding='utf-8') as f:
+                json.dump(summary, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logging.info(f"Error writing empty summary file {out_path}: {e}")
+        return summary
+
+    for path in glob.glob(os.path.join(times_dir, "*.json")):
+        name = os.path.splitext(os.path.basename(path))[0]
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception as e:
+            logging.info(f"Failed to read {path}: {e}")
+            continue
+
+        # Expect a list of numeric values; coerce to float and filter invalids
+        values: list[float] = []
+        if isinstance(data, list):
+            for v in data:
+                try:
+                    values.append(float(v))
+                except Exception:
+                    continue
+
+        if not values:
+            # Skip empty or non-numeric files
+            continue
+
+        avg = sum(values) / len(values)
+        med = median(values)
+        summary[name] = {"average": float(avg), "median": float(med)}
+
+    out_path = os.path.join(out_dir, "times_summary.json")
+    try:
+        with open(out_path, 'w', encoding='utf-8') as f:
+            json.dump(summary, f, indent=2, ensure_ascii=False)
+        logging.info(f"Time summary written to {out_path}")
+    except Exception as e:
+        logging.info(f"Error writing time summary {out_path}: {e}")
+
+    return summary
+
+def calculate_total_number_of_methods():
+    """
+    Iterate over all JSON files in data/metrics and count the total number
+    of methods. Keys used for project-level metrics are excluded from the
+    count.
+
+    Writes the total into data/general/methods_total.json and also updates
+    data/general/result.json with a top-level key "total_methods".
+
+    Returns:
+        int: Total number of methods counted across all metric JSON files.
+    """
+    base = os.getcwd()
+    metrics_dir = os.path.join(base, "data", "metrics")
+    general_dir = os.path.join(base, "data", "general")
+    os.makedirs(general_dir, exist_ok=True)
+
+    # Keys that are not methods and must be skipped
+    non_method_keys = {"__project_metrics__"}
+
+    total_methods = 0
+
+    if not os.path.isdir(metrics_dir):
+        # still write outputs with zero
+        methods_out = os.path.join(general_dir, "methods_total.json")
+        try:
+            with open(methods_out, 'w', encoding='utf-8') as f:
+                json.dump({"total_methods": total_methods}, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logging.info(f"Error writing {methods_out}: {e}")
+
+        # also update result.json
+        result_path = os.path.join(general_dir, "result.json")
+        try:
+            try:
+                with open(result_path, 'r', encoding='utf-8') as rf:
+                    result_data = json.load(rf)
+            except Exception:
+                result_data = {}
+            result_data["total_methods"] = total_methods
+            with open(result_path, 'w', encoding='utf-8') as wf:
+                json.dump(result_data, wf, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logging.info(f"Error writing result file {result_path}: {e}")
+        return total_methods
+
+    for entry in os.listdir(metrics_dir):
+        if not entry.endswith('.json'):
+            continue
+        path = os.path.join(metrics_dir, entry)
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except Exception as e:
+            logging.info(f"Failed to read {path}: {e}")
+            continue
+
+        if not isinstance(data, dict):
+            continue
+
+        for _file_path, functions in data.items():
+            if not isinstance(functions, dict):
+                continue
+            # count keys minus non-method keys
+            for k in functions.keys():
+                if k in non_method_keys:
+                    continue
+                total_methods += 1
+
+    # Write consolidated outputs
+    methods_out = os.path.join(general_dir, "methods_total.json")
+    try:
+        with open(methods_out, 'w', encoding='utf-8') as f:
+            json.dump({"total_methods": total_methods}, f, indent=2, ensure_ascii=False)
+        logging.info(f"Total methods written to {methods_out}")
+    except Exception as e:
+        logging.info(f"Error writing {methods_out}: {e}")
+
+    return total_methods
+
+def delete_not_found_vulns_from_result():
+    """
+    Update data/general/result.json so that, for each metric, the
+    value of "total_vulns" is replaced by the current "found_vulns".
+    Additionally, write the difference (old_total_vulns - found_vulns)
+    per metric to data/general/deleted_vulns.json.
+
+    Non-metric or malformed entries in result.json are ignored.
+    """
+    base = os.getcwd()
+    general_dir = os.path.join(base, "data", "general")
+    os.makedirs(general_dir, exist_ok=True)
+
+    result_path = os.path.join(general_dir, "result.json")
+    deleted_out_path = os.path.join(general_dir, "deleted_vulns.json")
+
+    # Load current results
+    try:
+        with open(result_path, 'r', encoding='utf-8') as f:
+            result_data = json.load(f)
+    except Exception as e:
+        logging.info(f"Could not read result file {result_path}: {e}")
+        return
+
+    if not isinstance(result_data, dict):
+        logging.info(f"Unexpected format in {result_path}: expected object at top-level")
+        return
+
+    deleted_stats: dict[str, int] = {}
+
+    # Iterate over metrics and adjust totals
+    for key, val in list(result_data.items()):
+        if not isinstance(val, dict):
+            # Skip non-metric entries (e.g., potential aggregate fields)
+            continue
+
+        old_total = val.get("total_vulns")
+        found = val.get("found_vulns")
+
+        # Only process entries that have both counts
+        try:
+            old_total_int = int(old_total)
+            found_int = int(found)
+        except Exception:
+            # Skip malformed entries
+            continue
+
+        diff = max(0, old_total_int - found_int)
+        deleted_stats[key] = diff
+
+        # Replace total with found
+        val["total_vulns"] = found_int
+        result_data[key] = val
+
+    # Write deleted_vulns.json
+    try:
+        with open(deleted_out_path, 'w', encoding='utf-8') as f:
+            json.dump(deleted_stats, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logging.info(f"Error writing deleted stats to {deleted_out_path}: {e}")
+
+    # Overwrite result.json with updated totals
+    try:
+        with open(result_path, 'w', encoding='utf-8') as f:
+            json.dump(result_data, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logging.info(f"Error writing updated results to {result_path}: {e}")
+
+    return
+
+def calculate_code_coverage() -> dict:
+    """
+    Traverse data/single-metrics and count, for each metric, how many methods
+    exist across all its JSON files. Write the counts into
+    data/general/result.json under each metric as "total_methods" and compute
+    a "coverage" value per metric as total_methods / methods_total (from
+    data/general/methods_total.json).
+
+    Returns:
+        dict: Mapping of metric name -> total method count
+    """
+    base = os.getcwd()
+
+    # Prefer plural directory; fallback to singular if needed
+    single_metrics_dir = os.path.join(base, "data", "single-metrics")
+    if not os.path.isdir(single_metrics_dir):
+        alt = os.path.join(base, "data", "single-metric")
+        if os.path.isdir(alt):
+            single_metrics_dir = alt
+
+    general_dir = os.path.join(base, "data", "general")
+    os.makedirs(general_dir, exist_ok=True)
+
+    counts: dict[str, int] = {}
+
+    if not os.path.isdir(single_metrics_dir):
+        logging.info(f"Single-metrics directory not found: {single_metrics_dir}")
+    else:
+        # Iterate each metric directory
+        for metric_name in os.listdir(single_metrics_dir):
+            metric_path = os.path.join(single_metrics_dir, metric_name)
+            if not os.path.isdir(metric_path):
+                continue
+
+            total = 0
+            # Iterate all JSON files for this metric
+            for entry in os.listdir(metric_path):
+                if not entry.endswith('.json'):
+                    continue
+                path = os.path.join(metric_path, entry)
+                try:
+                    with open(path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                except Exception as e:
+                    logging.info(f"Failed to read {path}: {e}")
+                    continue
+
+                if not isinstance(data, dict):
+                    continue
+
+                # data: code_path -> { function_name -> {metric_name: value} }
+                for _code_path, funcs in data.items():
+                    if isinstance(funcs, dict):
+                        total += len(funcs)
+
+            counts[metric_name] = total
+
+    # Read global methods total for coverage calculation
+    methods_total_path = os.path.join(general_dir, "methods_total.json")
+    global_total_methods: int | None = None
+    try:
+        with open(methods_total_path, 'r', encoding='utf-8') as f:
+            mt = json.load(f)
+            if isinstance(mt, dict):
+                try:
+                    global_total_methods = int(mt.get("total_methods"))
+                except Exception:
+                    global_total_methods = None
+    except Exception as e:
+        logging.info(f"Could not read methods_total.json at {methods_total_path}: {e}")
+
+    # Update result.json
+    result_path = os.path.join(general_dir, "result.json")
+    try:
+        try:
+            with open(result_path, 'r', encoding='utf-8') as rf:
+                result_data = json.load(rf)
+        except Exception:
+            result_data = {}
+
+        if not isinstance(result_data, dict):
+            result_data = {}
+
+        for metric, cnt in counts.items():
+            entry = result_data.get(metric)
+            if not isinstance(entry, dict):
+                entry = {}
+            entry["total_methods"] = int(cnt)
+
+            # Compute coverage if possible
+            coverage = None
+            if isinstance(global_total_methods, int) and global_total_methods > 0:
+                try:
+                    coverage = float(cnt) / float(global_total_methods)
+                except Exception:
+                    coverage = None
+            elif isinstance(global_total_methods, int) and global_total_methods == 0:
+                coverage = 0.0
+
+            if coverage is not None:
+                entry["coverage"] = float(coverage)
+            result_data[metric] = entry
+
+        with open(result_path, 'w', encoding='utf-8') as wf:
+            json.dump(result_data, wf, indent=2, ensure_ascii=False)
+        logging.info(f"Code coverage (method counts + coverage) written to {result_path}")
+    except Exception as e:
+        logging.info(f"Error writing result file {result_path}: {e}")
+
+    return counts
+
+def calculate_lift():
+    """
+    Compute Recall and Lift per metric and update data/general/result.json.
+
+    Formulas (per metric):
+      Recall = found_vulns / total_vulns
+      Effort = coverage
+      Lift   = Recall / Effort = (found_vulns / total_vulns) / coverage
+
+    Only sets values when the required inputs are present and denominators are > 0.
+    """
+    base = os.getcwd()
+    general_dir = os.path.join(base, "data", "general")
+    os.makedirs(general_dir, exist_ok=True)
+
+    result_path = os.path.join(general_dir, "result.json")
+    try:
+        with open(result_path, 'r', encoding='utf-8') as f:
+            result_data = json.load(f)
+    except Exception as e:
+        logging.info(f"Could not read result file {result_path}: {e}")
+        return None
+
+    if not isinstance(result_data, dict):
+        logging.info(f"Unexpected format in {result_path}: expected object at top-level")
+        return None
+
+    for metric, entry in list(result_data.items()):
+        if not isinstance(entry, dict):
+            continue
+
+        found = entry.get("found_vulns")
+        total = entry.get("total_vulns")
+        coverage = entry.get("coverage")
+
+        # Parse numeric values safely
+        try:
+            found_i = int(found)
+            total_i = int(total)
+        except Exception:
+            continue
+
+        try:
+            coverage_f = float(coverage)
+        except Exception:
+            coverage_f = None
+
+        # Compute recall if possible
+        recall = None
+        if total_i > 0:
+            try:
+                recall = float(found_i) / float(total_i)
+            except Exception:
+                recall = None
+
+        # Compute lift if possible (requires recall and coverage > 0)
+        lift = None
+        if recall is not None and isinstance(coverage_f, float) and coverage_f > 0.0:
+            try:
+                lift = recall / coverage_f
+            except Exception:
+                lift = None
+
+        # Update entry
+        # if recall is not None:
+            # entry["recall"] = float(recall)
+        if lift is not None:
+            entry["lift"] = float(lift)
+        result_data[metric] = entry
+
+    try:
+        with open(result_path, 'w', encoding='utf-8') as f:
+            json.dump(result_data, f, indent=2, ensure_ascii=False)
+        logging.info(f"Recall and Lift updated in {result_path}")
+    except Exception as e:
+        logging.info(f"Error writing result file {result_path}: {e}")
+
+    return result_data
+
+def save_result_state():
+    """
+    Persist a compact snapshot of the current results per metric keyed by threshold.
+
+    Reads data/general/result.json (current run's results written by other steps)
+    and stores/updates data/general/result_states.json in the following structure:
+
+        {
+          "<metric>": {
+            "<threshold>": [total_vulns, found_vulns, total_methods, coverage, lift]
+          },
+          ...
+        }
+
+    Additional behavior:
+    - If a metric's found_vulns is 0 (or cannot be parsed), no entry is written for that metric.
+    - Returns True if no metric was written at all in this call; otherwise False.
+
+    If result_states.json already exists, it will be merged (updated) so that
+    existing thresholds remain and the current threshold's entry is overwritten
+    with the latest values.
+    """
+    base = os.getcwd()
+    general_dir = os.path.join(base, "data", "general")
+    os.makedirs(general_dir, exist_ok=True)
+
+    # Source of truth for current run
+    result_path = os.path.join(general_dir, "result.json")
+    # Aggregated state across thresholds
+    out_path = os.path.join(general_dir, "result_states.json")
+
+    # Load current results
+    try:
+        with open(result_path, 'r', encoding='utf-8') as f:
+            current = json.load(f)
+    except Exception as e:
+        logging.info(f"Could not read current results at {result_path}: {e}")
+        return None
+
+    if not isinstance(current, dict):
+        logging.info(f"Unexpected format in {result_path}: expected object at top-level")
+        return None
+
+    # Load existing states (if any)
+    try:
+        with open(out_path, 'r', encoding='utf-8') as f:
+            states = json.load(f)
+            if not isinstance(states, dict):
+                states = {}
+    except Exception:
+        states = {}
+
+    # For each metric entry in current results, update the threshold snapshot
+    updated_metrics = 0
+    for metric, entry in current.items():
+        if not isinstance(entry, dict):
+            # Skip non-metric entries
+            continue
+
+        # Extract fields; if missing, skip metric to avoid ambiguous state
+        thr = entry.get("threshold")
+        total_vulns = entry.get("total_vulns")
+        found_vulns = entry.get("found_vulns")
+        total_methods = entry.get("total_methods")
+        coverage = entry.get("coverage")
+        lift = entry.get("lift")
+
+        # Require at least a threshold to key by, and basic counts present
+        if thr is None:
+            # No threshold to key by; skip politely
+            continue
+
+        # Build the value list in the requested order
+        try:
+            tv_i = int(total_vulns) if total_vulns is not None else None
+            fv_i = int(found_vulns) if found_vulns is not None else None
+            tm_i = int(total_methods) if total_methods is not None else None
+            cov_f = float(coverage) if coverage is not None else None
+            lift_f = float(lift) if lift is not None else None
+        except Exception:
+            # If parsing fails, skip this metric to avoid corrupting the state file
+            continue
+
+        # Only proceed if we have at least total_vulns and found_vulns
+        if tv_i is None or fv_i is None:
+            continue
+
+        # Requirement: do not write an entry for metrics with found_vulns == 0
+        if fv_i == 0:
+            continue
+
+        thr_key = str(thr)
+        metric_map = states.get(metric)
+        if not isinstance(metric_map, dict):
+            metric_map = {}
+
+        metric_map[thr_key] = [tv_i, fv_i, tm_i, cov_f, lift_f]
+        states[metric] = metric_map
+        updated_metrics += 1
+
+    # Write the aggregated state file only if something changed
+    if updated_metrics > 0:
+        try:
+            with open(out_path, 'w', encoding='utf-8') as f:
+                json.dump(states, f, indent=2, ensure_ascii=False)
+            logging.info(f"Saved result state for {updated_metrics} metrics to {out_path}")
+        except Exception as e:
+            logging.info(f"Error writing result states to {out_path}: {e}")
+
+    # Return True if nothing was written for all metrics; else False
+    return updated_metrics == 0
+
+def delete_not_found_vulns_from_metrics_dir():
+    """
+    Iterate over all JSON files in `data/not-found-methods/LinesNew` and delete
+    any files in `data/metrics` that share the same file name.
+
+    Returns:
+        int: Number of deleted files in `data/metrics`.
+    """
+    base = os.getcwd()
+    not_found_linesnew_dir = os.path.join(base, "data", "not-found-methods", "LinesNew")
+    metrics_dir = os.path.join(base, "data", "metrics")
+
+    if not os.path.isdir(not_found_linesnew_dir):
+        logging.info(f"Not-found directory not present: {not_found_linesnew_dir}")
+        return 0
+    if not os.path.isdir(metrics_dir):
+        logging.info(f"Metrics directory not present: {metrics_dir}")
+        return 0
+
+    try:
+        candidates = [e for e in os.listdir(not_found_linesnew_dir) if e.endswith('.json')]
+    except Exception as e:
+        logging.info(f"Failed to list {not_found_linesnew_dir}: {e}")
+        return 0
+
+    deleted = 0
+    for name in candidates:
+        target_path = os.path.join(metrics_dir, name)
+        try:
+            if os.path.isfile(target_path):
+                os.remove(target_path)
+                deleted += 1
+        except Exception as e:
+            logging.info(f"Failed to delete {target_path}: {e}")
+
+    logging.info(
+        f"Deleted {deleted}/{len(candidates)} matching metrics files based on not-found LinesNew entries"
+    )
+    return deleted
+
+
+def plot_graphs():
+    """Erzeugt für jede Metrik ein Lift-über-Threshold-Diagramm aus data/general/result_states.json.
+
+    - X-Achse: Thresholds (Schwellenwerte)
+    - Y-Achse: 5. Wert (Lift)
+    - Nur positive X- und Y-Achse sichtbar
+
+    Rückgabe:
+        int: Anzahl der generierten Diagramme
+    """
+    base = os.getcwd()
+    general_dir = os.path.join(base, "data", "general")
+    states_path = os.path.join(general_dir, "result_states.json")
+
+    # Lade Zustände
+    try:
+        with open(states_path, "r", encoding="utf-8") as f:
+            states = json.load(f)
+    except Exception as e:
+        logging.info(f"Could not read {states_path}: {e}")
+        return 0
+
+    if not isinstance(states, dict) or not states:
+        logging.info(f"No metrics to plot in {states_path}")
+        return 0
+
+    # Matplotlib nur laden, wenn benötigt
+    try:
+        import matplotlib
+        try:
+            matplotlib.use("Agg")  # headless
+        except Exception:
+            pass
+        import matplotlib.pyplot as plt
+    except Exception as e:
+        logging.info(f"matplotlib not available for plotting: {e}")
+        return 0
+
+    out_dir = os.path.join(general_dir, "plots")
+    os.makedirs(out_dir, exist_ok=True)
+
+    import re as _re
+
+    plotted = 0
+    for metric, thr_map in states.items():
+        if not isinstance(thr_map, dict) or not thr_map:
+            continue
+
+        # Punkte (Threshold, Lift) aufbauen; Index 4 == Lift
+        points = []
+        for thr_key, values in thr_map.items():
+            if not isinstance(values, list) or len(values) < 5:
+                continue
+            lift_val = values[4]
+            if lift_val is None:
+                continue
+            try:
+                x_thr = float(thr_key)
+                y_lift = float(lift_val)
+            except Exception:
+                continue
+            if x_thr < 0 or y_lift < 0:
+                # Nur positive Quadrant-Werte berücksichtigen
+                continue
+            points.append((x_thr, y_lift))
+
+        if not points:
+            continue
+
+        # Nach Threshold sortieren
+        points.sort(key=lambda p: p[0])
+        xs, ys = zip(*points)
+
+        fig, ax = plt.subplots()
+        ax.plot(xs, ys, marker="o")
+
+        # Nur positive Achsen anzeigen
+        ax.set_xlim(left=0)
+        ax.set_ylim(bottom=0)
+        try:
+            ax.spines["top"].set_visible(False)
+            ax.spines["right"].set_visible(False)
+        except Exception:
+            pass
+
+        ax.set_title(metric)
+        ax.set_xlabel("Threshold")
+        ax.set_ylabel("Lift")
+        ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.5)
+        fig.tight_layout()
+
+        # Dateiname absichern
+        metric_slug = _re.sub(r"[^0-9a-zA-Z]+", "_", (metric or "").strip().lower()).strip("_") or "metric"
+        out_path = os.path.join(out_dir, f"{metric_slug}.png")
+        try:
+            fig.savefig(out_path)
+            plotted += 1
+        except Exception as e:
+            logging.info(f"Failed to save plot for {metric} at {out_path}: {e}")
+        finally:
+            plt.close(fig)
+
+    logging.info(f"Generated {plotted} metric plot(s) in {out_dir}")
+    return plotted

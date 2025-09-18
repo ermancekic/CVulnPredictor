@@ -241,7 +241,10 @@ def extract_vuln_location():
     if not os.path.isdir(vulns_dir):
         raise FileNotFoundError(f"Vuln directory not found: {vulns_dir}")
 
-    cpu_count = 32
+    try:
+        cpu_count = max(1, multiprocessing.cpu_count())
+    except Exception:
+        cpu_count = 4
 
     for fname in os.listdir(vulns_dir):
         if not fname.endswith(".json"):
