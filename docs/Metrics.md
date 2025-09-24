@@ -5,60 +5,55 @@ In this project, we will examine the open‑source projects enrolled in OSS‑Fu
 
 # Leopard C 
 
+- **Lines of Code (LOC)**
+  - Distinct source lines within the function body that are neither comments nor blank lines
+
 - **Cyclomatic Complexity**
-  - Number of linearly independent paths in a function
-  - Approximate cyclomatic complexity by counting decision-point tokens
-  - each 'if', 'for', 'while', 'case', 'catch'
-  - each ternary '?'
-  - plus 1 for the method's entry point.
+  - Approximates cyclomatic complexity by counting decision points (if/for/while/case/catch and ?:) plus one for the function entry.
 - **Number of Loops**
-  - Total number of all loops in the function body
-  - Considered loop kinds are: for-, while-, do-while- and C++ ranged based for loops
+  - Counts all loop constructs (for, while, do, and C++ range-for) in the function.
 - **Number of Nested Loops**
-  - The Number of nested loops
-  - Considered loop kinds are: for-, while-, do-while- and C++ ranged based for loops
-- **Max Loop Nesting Level**
-  - Maximum depth of loop nesting
-  - Considered loop kinds are: for-, while-, do-while- and C++ ranged based for loops
+  - Counts loops that contain at least one other loop somewhere in their subtree.
+- **Max Nesting Loop Depth**
+  - Returns the maximum depth of nested loop constructs within the function.
 
 # Leopard V
 
 ## Dependency
 - **Number of Parameter Variables**
   - Number of input parameters of the function
-- **Number of Variables as Callee Parameters**
-  - Number of variables that are used as arguments when calling other functions
+- **Number of Callee Parameters Variables**
+  - Counts distinct variables that are passed as arguments to function calls within the function.
 
 ## Pointers
 - **Number of Pointer Arithmetic Ops**
-  - Counting of all pointer arithmetic operations
-  - Consideres operations are: Binary and Unary operators on pointers and array subscripting
+  - CCounts pointer-arithmetic operations (binary, compound assignments, and ++/--) involving pointer operands.
 - **Number of Variables Involved in Pointer Arithmetic**
-  - Number of different variables that are included in pointer arithmetic
-- **Max Pointer Ops per Variable**
+  - Counts distinct variables that participate in pointer-arithmetic operations.
+- **Max Pointer Aritmethic a Variable is involved in**
   - Highest number of pointer arithmetic operations in which a single variable is involved
 
 ## Control Structures:
 - **Number of Nested Control Structures**
-  - Total number of nested control structures
-- **Max Control Nesting Level**
+  - Count of control structures that contain at least one other control structure in their subtree (container structures)
+- **Max Nesting Level of COntrol Structures**
   - Maximum depth of nesting of control structures
 - **Max Control-Dependent Control Structures**
-  - Maximum number of structures that are control flow-dependent
+  - For every control statement, counts the total number of control statements in its AST subtree (including itself) and returns the largest such total—i.e., the most control-structure-dense nested region by count (not depth).
 - **Max Data-Dependent Control Structures**
-  - Maximum number of structures that are data flow-dependent
+  - Computes, for each variable, how many distinct control statements (if/while/for/do/switch/range-for) reference it in their condition and returns the maximum of these counts—i.e., which variable most often governs decisions.
 - **Number of if without else**
   - Counting of all if-blocks without associated else
 - **Number of Variables in Control Predicates**
-  - Number of variables used in the conditions (predicates) of control structures
+  - Counts distinct variables used inside the conditions of control statements.
 
 # Project/Git Metrics
 
 - **NumChanges**
-  - Number of commits that touched a file (git log --follow)
+  - Total number of non-merge commits that modified the file since its creation, following renames (git log --follow).
 - **LinesChanged**
-  - Cumulative lines added + deleted across the file's history
+  - Cumulative lines added plus lines deleted across all modifying commits (ignoring binary diffs where counts are unknown).
 - **LinesNew**
-  - Cumulative lines added across the file's history
+  - Cumulative lines added across all modifying commits (deletions not included).
 - **NumDevs**
   - Number of distinct authors (by email) who changed the file

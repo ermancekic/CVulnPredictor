@@ -592,21 +592,25 @@ def check_if_function_in_vulns(skip_set_total: bool = False):
         logging.info(f"Error writing result file {result_path}: {e}")
 
 
-def calculate_average_and_median_times() -> dict:
+def calculate_time_stats() -> dict:
     """
     Scan all JSON files under data/times where each file contains a list of
-    timing values (seconds) for one metric and compute the average and median
-    per metric. Writes a single consolidated JSON to data/general/times_summary.json.
+    timing values (seconds) for one metric and compute per metric:
+      - average
+      - median
+      - total (sum of all recorded seconds)
+      - top10 (list of the 10 longest durations, desc)
+    Writes a single consolidated JSON to data/general/times_summary.json.
 
     Returns:
-        dict: Mapping of metric (filename stem) -> {"average": float, "median": float}
+        dict: Mapping of metric (filename stem) -> {"average": float, "median": float, "total": float, "top10": list[float]}
     """
     base = os.getcwd()
     times_dir = os.path.join(base, "data", "times")
     out_dir = os.path.join(base, "data", "general")
     os.makedirs(out_dir, exist_ok=True)
 
-    summary: dict[str, dict[str, float]] = {}
+    summary: dict[str, dict] = {}
 
     if not os.path.isdir(times_dir):
         # Nothing to do
@@ -640,9 +644,17 @@ def calculate_average_and_median_times() -> dict:
             # Skip empty or non-numeric files
             continue
 
-        avg = sum(values) / len(values)
+        import heapq
+        total = float(sum(values))
+        avg = total / len(values)
         med = median(values)
-        summary[name] = {"average": float(avg), "median": float(med)}
+        top10 = heapq.nlargest(10, values)
+        summary[name] = {
+            "average": float(avg),
+            "median": float(med),
+            "total": total,
+            "top10": [float(x) for x in top10],
+        }
 
     out_path = os.path.join(out_dir, "times_summary.json")
     try:

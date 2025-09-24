@@ -333,7 +333,7 @@ def main() -> None:
     logging.info("Metric runs finished. Successes: %d | Failures: %d", successes, failures)
 
     # Final result calculations
-    calc_results.calculate_average_and_median_times()
+    calc_results.calculate_time_stats()
 
     calc_results.separate_and_filter_calculated_metrics(THRESHOLDS)
     calc_results.check_if_function_in_vulns()
@@ -348,7 +348,7 @@ def main() -> None:
 
     while not finished:
         increments = {
-            "lines of code": 5,
+            "lines of code": 10,
             "cyclomatic complexity": 1,
             "number of loops": 1,
             "number of nested loops": 1,
@@ -365,8 +365,8 @@ def main() -> None:
             "number of if structures without else": 1,
             "number of variables involved in control predicates": 2,
             "NumChanges": 1,
-            "LinesChanged": 25,
-            "LinesNew": 25,
+            "LinesChanged": 100,
+            "LinesNew": 100,
             "NumDevs": 1,
         }
         for key in THRESHOLDS:

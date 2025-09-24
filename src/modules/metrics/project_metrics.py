@@ -8,8 +8,6 @@ Implements project/file history metrics per file (tracked with git --follow):
 - LinesChanged: cumulative added + deleted lines across all touching commits
 - LinesNew:  cumulative added lines across all touching commits
 - NumDevs: number of distinct authors (by email) who touched the file
-
-These functions are imported and called from modules.calculate_metrics.
 """
 
 from __future__ import annotations
@@ -54,40 +52,6 @@ def _git_run(repo_root: str, args: list[str]) -> str:
 
 
 @lru_cache(maxsize=131072)
-def _numstat_totals(repo_root: str, rel_path: str) -> Tuple[int, int, int]:
-    """Return (num_changes, total_added, total_deleted) for file history.
-
-    Uses `git log --follow --numstat` and sums only numeric numstat lines.
-    """
-    # Count commits touching the file (with --follow for renames)
-    commits_out = _git_run(repo_root, [
-        "log", "--follow", "--format=%H", "--", rel_path
-    ])
-    commit_count = sum(1 for line in commits_out.splitlines() if line.strip())
-
-    # Collect per-commit added/deleted lines
-    numstat_out = _git_run(repo_root, [
-        "log", "--follow", "--numstat", "--format=", "--", rel_path
-    ])
-
-    total_added = 0
-    total_deleted = 0
-    for line in numstat_out.splitlines():
-        # Expected format: "<added>\t<deleted>\t<path>"
-        parts = line.split("\t")
-        if len(parts) < 3:
-            continue
-        a, d = parts[0].strip(), parts[1].strip()
-        if not (a.isdigit() and d.isdigit()):
-            # binary diff or unparsable, skip
-            continue
-        total_added += int(a)
-        total_deleted += int(d)
-
-    return commit_count, total_added, total_deleted
-
-
-@lru_cache(maxsize=131072)
 def _rel_to_root(repo_root: str, file_path: str) -> str:
     try:
         return os.path.relpath(os.path.abspath(file_path), repo_root)
@@ -96,21 +60,61 @@ def _rel_to_root(repo_root: str, file_path: str) -> str:
 
 
 @lru_cache(maxsize=131072)
-def _authors_count(repo_root: str, rel_path: str) -> int:
-    """Return number of unique authors (by email, case-insensitive) for a file history.
+def _history_rollup(repo_root: str, rel_path: str) -> Tuple[int, int, int, int]:
+    """Return (num_commits, total_added, total_deleted, num_authors) for file history.
 
-    Uses `git log --follow` to traverse history across renames and collects `%ae` (author email).
-    Non-empty emails are lowercased and deduplicated.
+    Ein einziger `git log`-Durchlauf mit:
+    - `--follow` (Rename-Erkennung)
+    - `--no-merges` (Merges nicht doppelt zählen)
+    - `--numstat` (Added/Deleted je Commit)
+    - `--format=%x00%H%x00%ae%x00` (Commit-Marker mit NUL-Delimiter für robustes Parsen)
     """
-    out = _git_run(repo_root, [
-        "log", "--follow", "--format=%ae", "--", rel_path
-    ])
-    emails = set()
+    out = _git_run(
+        repo_root,
+        [
+            "log",
+            "--follow",
+            "--no-merges",
+            "--numstat",
+            "--format=%x00%H%x00%ae%x00",
+            "--",
+            rel_path,
+        ],
+    )
+
+    num_commits = 0
+    total_added = 0
+    total_deleted = 0
+    authors = set()
+
     for line in out.splitlines():
-        e = (line or "").strip().lower()
-        if e:
-            emails.add(e)
-    return len(emails)
+        if not line:
+            continue
+
+        # Commit-Marker: \x00<hash>\x00<email>\x00
+        if line.startswith("\x00"):
+            num_commits += 1
+            marker = line[1:]  # führendes NUL entfernen
+            fields = marker.split("\x00")
+            # Erwartet: ["<hash>", "<email>", ""] oder mindestens hash+email
+            if len(fields) >= 2:
+                email = (fields[1] or "").strip().lower()
+                if email:
+                    authors.add(email)
+            continue
+
+        # Numstat-Zeile: "<added>\t<deleted>\t<path>"
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        a, d = parts[0].strip(), parts[1].strip()
+        if a.isdigit():
+            total_added += int(a)
+        # Bei Binärdiffs steht '-' – nur numerische Werte verwenden
+        if d.isdigit():
+            total_deleted += int(d)
+
+    return num_commits, total_added, total_deleted, len(authors)
 
 
 def calculate_num_changes(file_path: str) -> int:
@@ -119,7 +123,7 @@ def calculate_num_changes(file_path: str) -> int:
     if not root:
         return 0
     rel = _rel_to_root(root, file_path)
-    n, _a, _d = _numstat_totals(root, rel)
+    n, _a, _d, _devs = _history_rollup(root, rel)
     return n
 
 
@@ -129,7 +133,7 @@ def calculate_lines_changed(file_path: str) -> int:
     if not root:
         return 0
     rel = _rel_to_root(root, file_path)
-    _n, a, d = _numstat_totals(root, rel)
+    _n, a, d, _devs = _history_rollup(root, rel)
     return a + d
 
 
@@ -139,7 +143,7 @@ def calculate_lines_new(file_path: str) -> int:
     if not root:
         return 0
     rel = _rel_to_root(root, file_path)
-    _n, a, _d = _numstat_totals(root, rel)
+    _n, a, _d, _devs = _history_rollup(root, rel)
     return a
 
 
@@ -149,14 +153,25 @@ def calculate_num_devs(file_path: str) -> int:
     if not root:
         return 0
     rel = _rel_to_root(root, file_path)
-    return _authors_count(root, rel)
+    _n, _a, _d, devs = _history_rollup(root, rel)
+    return devs
 
 
 def calculate_file_project_metrics(file_path: str) -> dict:
-    """Convenience helper returning all three metrics for a file path."""
+    """Convenience helper returning all metrics for a file path."""
+    root = _find_git_root(file_path)
+    if not root:
+        return {
+            "NumChanges": 0,
+            "LinesChanged": 0,
+            "LinesNew": 0,
+            "NumDevs": 0,
+        }
+    rel = _rel_to_root(root, file_path)
+    n, a, d, devs = _history_rollup(root, rel)
     return {
-        "NumChanges": calculate_num_changes(file_path),
-        "LinesChanged": calculate_lines_changed(file_path),
-        "LinesNew": calculate_lines_new(file_path),
-        "NumDevs": calculate_num_devs(file_path),
+        "NumChanges": n,
+        "LinesChanged": a + d,
+        "LinesNew": a,
+        "NumDevs": devs,
     }
