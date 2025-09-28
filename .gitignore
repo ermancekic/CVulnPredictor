@@ -19,6 +19,8 @@ LLVM-20.1.7-Linux-X64/
 LLVM-20.1.8-Linux-X64/
 LLVM-20.1.8-Linux-X64.tar.xz
 llvm-project-llvmorg-20.1.8/
+LLVM-21.1.2-Linux-X64/
+llvm-project-llvmorg-21.1.2
 logs/
 projects_2023-11-14.json
 testcases.tar.gz

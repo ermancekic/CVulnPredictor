@@ -120,17 +120,6 @@ def test_calculate_number_of_nested_control_structures():
     for i in range(len(testResult)):
         assert testResult[i][1] == trueResult[i], f"Expected {trueResult[i]} but got {testResult[i][1]} for function {testResult[i][0]}"
 
-def test_calculate_maximum_nesting_level_of_control_structures():
-    """
-    Test the maximum nesting level of control structures metric on a sample C source file.
-    """
-    sourceCode = os.path.join(os.getcwd(), "tests", "src", "controll_structures.c")
-    testResult = calculate_metrics.run_test(sourceCode, calculate_metrics.calculate_maximum_nesting_level_of_control_structures)
-    trueResult = [0, 1, 1, 1, 1, 1, 2, 3, 4]
-    
-    for i in range(len(testResult)):
-        assert testResult[i][1] == trueResult[i], f"Expected {trueResult[i]} but got {testResult[i][1]} for function {testResult[i][0]}"
-
 def test_calculate_maximum_of_control_dependent_control_structures():
     """
     Test the maximum of control dependent control structures metric on a sample C source file.
@@ -211,3 +200,28 @@ def test_project_metrics_num_devs():
     file_path = os.path.join(os.getcwd(), "tests", "TestWorkspace", "TestFile.c")
     value = project_metrics.calculate_num_devs(file_path)
     assert value == 2, f"Expected 2 developer but got {value} for {file_path}"
+
+
+def test_maximum_nesting_level_of_control_structures():
+    """
+    Test the maximum nesting level of control structures on crafted C examples.
+    """
+    sourceCode = os.path.join(os.getcwd(), "tests", "src", "maximum_nesting_level_of_control_structures.c")
+    testResult = calculate_metrics.run_test(sourceCode, calculate_metrics.calculate_maximum_nesting_level_of_control_structures)
+
+    # Expected per function in source order:
+    # no_control -> 0
+    # one_if -> 1
+    # nested_if -> 2
+    # if_in_loop -> 3  (for -> if -> while)
+    # switch_with_if -> 2  (switch -> if)
+    # else_if_chain -> 1  (else-if chain flattened; same nesting level)
+    # loop_switch_if_nested -> 3  (for -> switch -> if)
+    # triple_nested_loops_with_if -> 4  (for -> while -> do -> if)
+    # nested_else_if 
+    trueResult = [0, 1, 2, 3, 2, 1, 3, 4, 3]
+
+    for i in range(len(testResult)):
+        assert testResult[i][1] == trueResult[i], (
+            f"Expected {trueResult[i]} but got {testResult[i][1]} for function {testResult[i][0]}"
+        )

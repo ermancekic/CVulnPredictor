@@ -17,14 +17,14 @@ import shutil
 import hashlib
 import time
 
-clang_path   = os.path.abspath(os.path.join(os.getcwd(), "llvm-project-llvmorg-20.1.8", "clang", "bindings", "python"))
+clang_path   = os.path.abspath(os.path.join(os.getcwd(), "llvm-project-llvmorg-21.1.2", "clang", "bindings", "python"))
 logging.info(f"clang_path: {clang_path}")
 sys.path.insert(0, clang_path)
 
 from clang import cindex
 from clang.cindex import TokenKind, CursorKind, TypeKind, TranslationUnit
 
-libclang_path =  os.path.abspath(os.path.join(os.getcwd(), "LLVM-20.1.8-Linux-X64", "lib", "libclang.so"))
+libclang_path =  os.path.abspath(os.path.join(os.getcwd(), "LLVM-21.1.2-Linux-X64", "lib", "libclang.so"))
 logging.info(f"libclang_path:  {libclang_path}")
 cindex.Config.set_library_file(libclang_path)
 cindex.Config.set_compatibility_check(False)

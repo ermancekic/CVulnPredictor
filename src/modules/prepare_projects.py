@@ -386,7 +386,7 @@ def get_clang_dependencies():
         subprocess.CalledProcessError: If any download or extraction command fails.
     """
     current_dir = os.getcwd()
-    llvm_version = "20.1.8"
+    llvm_version = "21.1.2"
 
     # 1) Binärpaket (Linux X64 .tar.xz)
     bin_archive = f"LLVM-{llvm_version}-Linux-X64.tar.xz"

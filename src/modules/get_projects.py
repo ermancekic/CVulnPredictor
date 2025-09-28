@@ -1,13 +1,14 @@
 """Utility to iterate all arvo-project JSON files, run their docker images, copy source & includes.
 
-For each JSON file (filename <projectname>.json) in data/arvo-projects, all localID values are collected. For each localID, the Docker image "cr.cispa.de/d/n132/arvo:<localID>-vul" is processed:
+Für jedes JSON-File (Dateiname <projectname>.json) in data/arvo-projects werden alle localID-Werte gesammelt.
+Für jede localID wird das Docker-Image "cr.cispa.de/d/n132/arvo:<localID>-vul" verarbeitet:
 
-1. Target folder repositories/<projectname>_<localID> is created.
-2. Image is pulled (if necessary) and a container is created.
-3. 'arvo compile' is executed in the container.
-4. The paths /src/<projectname>, /usr/include, and /work are copied from the container to the target folder.
-5. Container is stopped/removed and the image is deleted again (configurable).
-6. Idempotency: If already fully extracted, the pair is skipped.
+1. Zielordner repositories/<projectname>_<localID> wird erstellt.
+2. Image wird gepullt (falls nötig) und ein Container erstellt.
+3. 'arvo compile' wird im Container ausgeführt.
+4. Die Pfade /src/<projectname>, /usr/include und /work werden in den Zielordner kopiert.
+5. Container wird gestoppt/entfernt und (optional) das Image gelöscht.
+6. Idempotenz: **Wenn der Zielordner bereits existiert, wird das Paar übersprungen.**
 """
 
 from __future__ import annotations
@@ -15,7 +16,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -89,27 +89,6 @@ def _dir_nonempty(p: Path) -> bool:
     return p.exists() and any(p.iterdir())
 
 
-def _already_extracted(dest_dir: Path, project: str, require_both: bool = True) -> bool:
-    """Determine if we can skip this pair."""
-    marker = _read_marker(dest_dir)
-    expected_src = dest_dir / project
-    expected_inc = dest_dir / "include"
-    expected_work = dest_dir / "work"
-
-    src_ok = _dir_nonempty(expected_src)
-    inc_ok = _dir_nonempty(expected_inc)
-    work_ok = _dir_nonempty(expected_work)
-
-    # If marker is "completed", we trust it (fastest check)
-    if marker and marker.get("completed") is True:
-        return True
-
-    # Fallback: If all (or at least one) paths are present
-    if require_both:
-        return src_ok and inc_ok and work_ok
-    return src_ok or inc_ok or work_ok
-
-
 def _image_id(image_tag: str) -> Optional[str]:
     try:
         cp = _run(["docker", "inspect", "--format", "{{.Id}}", image_tag], capture_output=True)
@@ -149,14 +128,15 @@ def _process_one(
 ) -> Tuple[str, int, bool, str]:
     """
     Process a (project, local_id) pair.
+    Idempotenz-Regel (neu): Wenn der Zielordner bereits existiert, wird übersprungen.
     Returns: (project, local_id, success, message)
     """
     image_tag = f"cr.cispa.de/d/n132/arvo:{local_id}-vul"
     dest_dir = repositories_dir / f"{project}_{local_id}"
-    dest_dir.mkdir(parents=True, exist_ok=True)
 
-    if skip_existing and _already_extracted(dest_dir, project, require_both=True):
-        msg = f"Skipped (already extracted): {image_tag}"
+    # *** WICHTIG: Skip-Check VOR dem mkdir, sonst würde der Ordner immer existieren. ***
+    if skip_existing and dest_dir.exists():
+        msg = f"Skipped (target folder already exists): {dest_dir}"
         LOG.info(msg)
         return project, local_id, True, msg
 
@@ -164,6 +144,9 @@ def _process_one(
         msg = f"DRY-RUN: Would process {image_tag} -> {dest_dir} (incl. 'arvo compile' & /work)"
         LOG.info(msg)
         return project, local_id, True, msg
+
+    # Ordner jetzt erst erstellen
+    dest_dir.mkdir(parents=True, exist_ok=True)
 
     # Pull (idempotent)
     try:
@@ -188,17 +171,16 @@ def _process_one(
         # Container starten und 'arvo compile' ausführen
         try:
             _run(["docker", "start", container_id])
-            # exactly as requested: "arvo compile"
-            # via login shell (-lc) to ensure ENV/Path are correct
+            # genau wie gefordert: "arvo compile"
             _run(["docker", "exec", container_id, "bash", "-lc", "arvo compile"])
             LOG.info("%s: 'arvo compile' executed successfully", image_tag)
         except subprocess.CalledProcessError as e:
             err = f"'arvo compile' failed: {e}"
             LOG.warning("%s: %s", image_tag, err)
             errors.append(err)
-            # Try to continue copying – /work might still exist
+            # Wir versuchen dennoch zu kopieren – /work könnte existieren.
 
-        # Copy targets (only missing)
+        # Zielpfade kopieren (nur fehlende/leer)
         src_paths = [f"/src/{project}", "/usr/include", "/work"]
         for sp in src_paths:
             name, copied, err = _copy_if_missing(container_id, sp, dest_dir)
@@ -206,7 +188,7 @@ def _process_one(
             if err:
                 errors.append(f"{sp}: {err}")
 
-        # Write marker (completed only if all three targets are present)
+        # Marker schreiben (nur informativ; NICHT mehr für Skip-Logik genutzt)
         payload = {
             "image_tag": image_tag,
             "image_id": _image_id(image_tag),
@@ -233,7 +215,7 @@ def _process_one(
 
     finally:
         if container_id:
-            # cleanly stop, then remove
+            # sauber stoppen, dann entfernen
             try:
                 _run(["docker", "stop", container_id], check=False)
             except subprocess.CalledProcessError:
@@ -267,7 +249,7 @@ def process_arvo_projects(
         dry_run: Only display, do not execute.
         stop_after: Optionally limit the number of (project,localID) pairs (Debug / Test).
         workers: Number of parallel threads (IO-bound; Default based on CPU).
-        skip_existing: Skip already fully extracted pairs.
+        skip_existing: **NEU** – Überspringe Paare, wenn der Zielordner bereits existiert.
         remove_image: After processing, run 'docker rmi -f' for the respective image.
 
     Returns:
@@ -297,7 +279,7 @@ def process_arvo_projects(
         tasks = tasks[:stop_after]
         LOG.info("Stop-After activated: Processing only %d pairs", len(tasks))
 
-    # Process in parallel
+    # Parallel verarbeiten
     futures = []
     processed = {proj: [] for proj in {t[0] for t in tasks}}
     if not tasks:
@@ -347,7 +329,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true", help="Only display, do nothing")
     parser.add_argument("--stop-after", type=int, help="Limit number of processed pairs")
     parser.add_argument("--workers", type=int, default=DEFAULT_MAX_WORKERS, help="Number of parallel workers (threads)")
-    parser.add_argument("--no-skip-existing", dest="skip_existing", action="store_false", help="DO NOT skip, even if already extracted")
+    parser.add_argument("--no-skip-existing", dest="skip_existing", action="store_false", help="DO NOT skip, even if target folder exists")
     parser.add_argument("--keep-images", dest="remove_image", action="store_false", help="Keep Docker images after processing")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose logging")
     args = parser.parse_args(list(argv) if argv is not None else None)

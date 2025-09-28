@@ -36,7 +36,7 @@ In this project, we will examine the open‑source projects enrolled in OSS‑Fu
 ## Control Structures:
 - **Number of Nested Control Structures**
   - Count of control structures that contain at least one other control structure in their subtree (container structures)
-- **Max Nesting Level of COntrol Structures**
+- **Max Nesting Level of Control Structures**
   - Maximum depth of nesting of control structures
 - **Max Control-Dependent Control Structures**
   - For every control statement, counts the total number of control statements in its AST subtree (including itself) and returns the largest such total—i.e., the most control-structure-dense nested region by count (not depth).

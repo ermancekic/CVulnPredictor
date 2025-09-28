@@ -433,9 +433,53 @@ def calculate_maximum_nesting_level_of_control_structures(cursor):
 
     def visit(node, depth=0):
         nonlocal max_depth
-        if node.kind in control_kinds:
-            depth += 1
-            max_depth = max(max_depth, depth)
+
+        # Special handling for IF_STMT to flatten else-if chains:
+        # In Clang's AST, an "else if" is represented as an IF_STMT in the else branch
+        # of a preceding IF_STMT. We count that as the same nesting level as the first if.
+        if node.kind == CursorKind.IF_STMT:
+            new_depth = depth + 1
+            if new_depth > max_depth:
+                max_depth = new_depth
+
+            children = list(node.get_children())
+            cond = children[0] if len(children) >= 1 else None
+            then = children[1] if len(children) >= 2 else None
+            els  = children[2] if len(children) >= 3 else None
+
+            # Visit condition (does not affect nesting depth meaningfully)
+            if cond is not None:
+                visit(cond, new_depth)
+
+            # Then-branch is nested under this if
+            if then is not None:
+                visit(then, new_depth)
+
+            # Else-branch: if it's an IF_STMT (else-if), keep the same depth
+            # so the whole chain stays flat; otherwise, it's nested under this if
+            if els is not None:
+                if els.kind == CursorKind.IF_STMT:
+                    visit(els, depth)  # flatten else-if chain
+                else:
+                    visit(els, new_depth)
+            return
+
+        # Other control structures increase depth normally
+        if node.kind in {
+            CursorKind.FOR_STMT,
+            CursorKind.WHILE_STMT,
+            CursorKind.DO_STMT,
+            CursorKind.CXX_FOR_RANGE_STMT,
+            CursorKind.SWITCH_STMT,
+        }:
+            new_depth = depth + 1
+            if new_depth > max_depth:
+                max_depth = new_depth
+            for child in node.get_children():
+                visit(child, new_depth)
+            return
+
+        # Non-control nodes: propagate same depth
         for child in node.get_children():
             visit(child, depth)
 

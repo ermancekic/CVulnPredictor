@@ -384,93 +384,90 @@ def _normalize_loc_path(p: str) -> str:
     # Reassemble
     return "/".join(parts)
 
-def check_if_function_in_vulns(skip_set_total: bool = False):
+def _cifiv_process_vuln_file(args):
     """
-    Identify functions from single-metrics that match known vulnerabilities and write results.
-    Path comparison uses a normalized vulnerability file (.. and before cut off),
-    function comparison uses only the bare function name (without namespace).
-    If skip_set_total is True, do not overwrite "total_vulns" in data/general/result.json
-    (only update "found_vulns").
+    Process exactly one file from data/arvo-projects and write the corresponding
+    found/not-found files. Returns sets that allow the main process to compute
+    stable counters without double-counting.
+
+    Args:
+        args: (vuln_path, metric_names, metrics_dir, output_dir, not_found_dir)
+
+    Returns:
+        dict[str, dict[str, list[str]]]:
+            {
+              "seen_total": {metric: [sm_key, ...]},
+              "seen_found": {metric: [sm_key, ...]}
+            }
     """
-    base = os.getcwd()
-    metrics_dir = os.path.join(base, "data", "single-metrics")
-    vulns_dir = os.path.join(base, "data", "arvo-projects")
-    output_dir = os.path.join(base, "data", "found-methods")
-    general_dir = os.path.join(base, "data", "general")
+    (vuln_path, metric_names, metrics_dir, output_dir, not_found_dir) = args
 
-    # ensure base output dirs exist
-    os.makedirs(output_dir, exist_ok=True)
-    os.makedirs(general_dir, exist_ok=True)
+    seen_total = {m: set() for m in metric_names}
+    seen_found = {m: set() for m in metric_names}
 
-    # ensure each metric folder exists in output and not-found
-    metric_names = [m for m in os.listdir(metrics_dir) if os.path.isdir(os.path.join(metrics_dir, m))]
-    for metric_name in metric_names:
-        os.makedirs(os.path.join(output_dir, metric_name), exist_ok=True)
+    # Derive project name from file name
+    project = os.path.splitext(os.path.basename(vuln_path))[0]
 
-    not_found_dir = os.path.join(base, "data", "not-found-methods")
-    for metric_name in metric_names:
-        os.makedirs(os.path.join(not_found_dir, metric_name), exist_ok=True)
-
-    # per-metric counters and seen-sets
-    metric_counters = {m: {"total_vulns": 0, "found_vulns": 0} for m in metric_names}
-    metric_seen_total = {m: set() for m in metric_names}
-    metric_seen_found = {m: set() for m in metric_names}
-
-    # iterate vulnerability files
-    for vuln_file in os.listdir(vulns_dir):
-        if not vuln_file.endswith('.json'):
-            continue
-        project = os.path.splitext(vuln_file)[0]
-        vuln_path = os.path.join(vulns_dir, vuln_file)
+    # Build per-metric filename sets once per worker for fast existence checks
+    metric_files: dict[str, set[str]] = {}
+    for m in metric_names:
+        mpth = os.path.join(metrics_dir, m)
         try:
-            with open(vuln_path, 'r', encoding='utf-8') as vf:
-                vuln_list = json.load(vf)
-        except Exception as e:
-            logging.info(f"Error reading {vuln_path}: {e}")
+            metric_files[m] = set(e for e in os.listdir(mpth) if e.endswith(".json"))
+        except Exception:
+            metric_files[m] = set()
+
+    try:
+        with open(vuln_path, "r", encoding="utf-8") as vf:
+            vuln_list = json.load(vf)
+    except Exception as e:
+        logging.info(f"Error reading {vuln_path}: {e}")
+        return {"seen_total": {m: [] for m in metric_names}, "seen_found": {m: [] for m in metric_names}}
+
+    for vuln in vuln_list if isinstance(vuln_list, list) else []:
+        local_id = (vuln.get("localID") if isinstance(vuln, dict) else None)
+        loc = vuln.get("location", {}) if isinstance(vuln, dict) else {}
+        loc_file_raw = loc.get("file")
+        loc_func_raw = loc.get("function", "") or ""
+
+        if not local_id or not loc_file_raw or not loc_func_raw:
             continue
 
-        for vuln in vuln_list:
-            local_id = vuln.get('localID')
-            loc = vuln.get('location', {})
-            loc_file_raw = loc.get('file')
-            loc_func_raw = loc.get('function', '')
+        loc_file = _normalize_loc_path(loc_file_raw)
+        if not loc_file:
+            continue
 
-            if not local_id or not loc_file_raw or not loc_func_raw:
+        func_name = _base_func_name(loc_func_raw)
+        vuln_param_count, vuln_param_types = _param_info(loc_func_raw)
+
+        # Counter key as in the original implementation
+        sm_key = f"{project}_{local_id}"
+        target_file_name = f"{sm_key}.json"
+
+        for metric_name in metric_names:
+            # Count "total" only if the single-metrics file exists (matching original logic)
+            if target_file_name not in metric_files.get(metric_name, set()):
+                continue
+            if sm_key not in seen_total[metric_name]:
+                seen_total[metric_name].add(sm_key)
+
+            sm_file = os.path.join(metrics_dir, metric_name, target_file_name)
+            try:
+                with open(sm_file, "r", encoding="utf-8") as sf:
+                    sm_data = json.load(sf)
+            except Exception as e:
+                logging.info(f"Error reading {sm_file}: {e}")
                 continue
 
-            # Normalize vulnerability file path: cut off everything up to and including the last '..'
-            loc_file = _normalize_loc_path(loc_file_raw)
-            if not loc_file:
-                continue
+            match_found = False
 
-            # Bare function name and parameter info (if available)
-            func_name = _base_func_name(loc_func_raw)
-            vuln_param_count, vuln_param_types = _param_info(loc_func_raw)
-
-            for metric_name in metric_names:
-                sm_file = os.path.join(metrics_dir, metric_name, f"{project}_{local_id}.json")
-                if not os.path.exists(sm_file):
-                    continue
-
-                sm_key = f"{project}_{local_id}"
-                if sm_key not in metric_seen_total[metric_name]:
-                    metric_counters[metric_name]["total_vulns"] += 1
-                    metric_seen_total[metric_name].add(sm_key)
-
-                try:
-                    with open(sm_file, 'r', encoding='utf-8') as sf:
-                        sm_data = json.load(sf)
-                except Exception as e:
-                    logging.info(f"Error reading {sm_file}: {e}")
-                    continue
-
-                match_found = False
-
+            if isinstance(sm_data, dict):
                 for code_path, funcs in sm_data.items():
-                    # code_path vereinheitlichen (nur Slashes)
-                    code_path_norm = code_path.replace('\\', '/')
-                    # Comparison by end: code_path must end with the cleaned loc_file
+                    code_path_norm = (code_path or "").replace("\\", "/")
+                    # Compare by suffix: single-metrics path must end with the normalized vuln file path
                     if not code_path_norm.endswith(loc_file):
+                        continue
+                    if not isinstance(funcs, dict):
                         continue
 
                     for sig in funcs.keys():
@@ -478,118 +475,177 @@ def check_if_function_in_vulns(skip_set_total: bool = False):
                         if sig_base != func_name:
                             continue
 
-                        # Parameter-aware matching:
-                        # If vulnerability signature exposes parameter info, require same arity only.
-                        # The stricter type-equality checks are intentionally commented out per request.
+                        # Parameter-aware match: require only the same arity if vuln signature exposes params
                         sig_param_count, sig_param_types = _param_info(sig)
                         if vuln_param_count is not None:
-                            # If metrics signature has no parameters parsed, fall back to name-only
                             if sig_param_count is not None and sig_param_count != vuln_param_count:
                                 continue
-                            # Optional: if both sides have normalized types, require equality
-                            # (Deactivated to only compare parameter count)
-                            # if (
-                            #     sig_param_types is not None
-                            #     and vuln_param_types is not None
-                            #     and sig_param_types
-                            #     and vuln_param_types
-                            #     and sig_param_types != vuln_param_types
-                            # ):
-                            #     continue
+                            # Type-equality intentionally NOT enforced (kept aligned with original behavior)
 
-                        # If we get here, we consider it a match
+                        # We have a match
                         match_found = True
-                        out_path = os.path.join(output_dir, metric_name, f"{project}_{local_id}.json")
+                        out_path = os.path.join(output_dir, metric_name, target_file_name)
                         try:
-                            with open(out_path, 'r', encoding='utf-8') as of:
+                            with open(out_path, "r", encoding="utf-8") as of:
                                 out_data = json.load(of)
                         except Exception:
                             out_data = {}
 
-                        # In output: Key = original code_path, function key = bare name
-                        # Enrich each found entry with the same details as not-found
-                        # Prefer vulnerability-side params if provided; otherwise fall back to metrics-side
                         log_param_count = vuln_param_count if vuln_param_count is not None else sig_param_count
                         log_param_types = (
                             vuln_param_types if (vuln_param_types not in (None, [])) else (sig_param_types or [])
                         )
 
                         found_entry = {
-                            'id': local_id,
-                            'function': func_name,
-                            'signature': loc_func_raw,
-                            'param_count': log_param_count,
-                            'param_types': log_param_types,
-                            'metrics_signature': sig,
-                            'metrics_param_count': sig_param_count,
-                            'metrics_param_types': sig_param_types if sig_param_types is not None else [],
+                            "id": local_id,
+                            "function": func_name,
+                            "signature": loc_func_raw,
+                            "param_count": log_param_count,
+                            "param_types": log_param_types,
+                            "metrics_signature": sig,
+                            "metrics_param_count": sig_param_count,
+                            "metrics_param_types": sig_param_types if sig_param_types is not None else [],
                         }
                         out_data.setdefault(code_path, {}).setdefault(sig_base, []).append(found_entry)
 
                         try:
-                            with open(out_path, 'w', encoding='utf-8') as of:
+                            with open(out_path, "w", encoding="utf-8") as of:
                                 json.dump(out_data, of, indent=2, ensure_ascii=False)
                         except Exception as e:
                             logging.info(f"Error writing {out_path}: {e}")
 
-                        if sm_key not in metric_seen_found[metric_name]:
-                            metric_counters[metric_name]["found_vulns"] += 1
-                            metric_seen_found[metric_name].add(sm_key)
+                        # Update per-metric found set
+                        seen_found[metric_name].add(sm_key)
 
-                if not match_found:
-                    nf_path = os.path.join(not_found_dir, metric_name, f"{project}_{local_id}.json")
-                    try:
-                        with open(nf_path, 'r', encoding='utf-8') as nf:
-                            nf_data = json.load(nf)
-                    except Exception:
-                        nf_data = {}
+            # If no match for this metric: write not-found entry
+            if not match_found:
+                nf_path = os.path.join(not_found_dir, metric_name, target_file_name)
+                try:
+                    with open(nf_path, "r", encoding="utf-8") as nf:
+                        nf_data = json.load(nf)
+                except Exception:
+                    nf_data = {}
 
-                    # Enriched not-found entry with signature and parameter details
-                    # Keep the structure grouped by normalized file path
-                    entry = {
-                        "function": func_name,
-                        "signature": loc_func_raw,
-                        "param_count": vuln_param_count,
-                        "param_types": vuln_param_types if vuln_param_types is not None else [],
-                    }
+                entry = {
+                    "function": func_name,
+                    "signature": loc_func_raw,
+                    "param_count": vuln_param_count,
+                    "param_types": vuln_param_types if vuln_param_types is not None else [],
+                }
+                nf_data.setdefault(loc_file, []).append(entry)
 
-                    nf_data.setdefault(loc_file, []).append(entry)
+                try:
+                    with open(nf_path, "w", encoding="utf-8") as nf:
+                        json.dump(nf_data, nf, indent=2, ensure_ascii=False)
+                except Exception as e:
+                    logging.info(f"Error writing {nf_path}: {e}")
 
-                    try:
-                        with open(nf_path, 'w', encoding='utf-8') as nf:
-                            json.dump(nf_data, nf, indent=2, ensure_ascii=False)
-                    except Exception as e:
-                        logging.info(f"Error writing {nf_path}: {e}")
+    return {
+        "seen_total": {m: list(seen_total[m]) for m in metric_names},
+        "seen_found": {m: list(seen_found[m]) for m in metric_names},
+    }
 
-    # write general/result.json
+def check_if_function_in_vulns(skip_set_total: bool = False):
+    """
+    Parallelized variant: distributes processing per file in data/arvo-projects
+    across multiple processes. Aggregates counters at the end and writes them to
+    data/general/result.json (same semantics as the original).
+
+    Parallelism control:
+      - Environment variable CIFIV_WORKERS (int >= 1)
+      - Fallback: min(number of files, CPU cores)
+    """
+    base = os.getcwd()
+    metrics_dir = os.path.join(base, "data", "single-metrics")
+    vulns_dir = os.path.join(base, "data", "arvo-projects")
+    output_dir = os.path.join(base, "data", "found-methods")
+    general_dir = os.path.join(base, "data", "general")
+    not_found_dir = os.path.join(base, "data", "not-found-methods")
+
+    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(general_dir, exist_ok=True)
+    os.makedirs(not_found_dir, exist_ok=True)
+
+    # Enumerate metrics and ensure target directories exist
+    metric_names = [m for m in os.listdir(metrics_dir) if os.path.isdir(os.path.join(metrics_dir, m))] \
+                   if os.path.isdir(metrics_dir) else []
+    for metric_name in metric_names:
+        os.makedirs(os.path.join(output_dir, metric_name), exist_ok=True)
+        os.makedirs(os.path.join(not_found_dir, metric_name), exist_ok=True)
+
+    # Collect vulnerability files
+    vuln_files = [os.path.join(vulns_dir, f) for f in os.listdir(vulns_dir)
+                  if f.endswith(".json")] if os.path.isdir(vulns_dir) else []
+
+    if not vuln_files:
+        logging.info(f"No vulnerability files found in {vulns_dir}")
+        # Nothing else to update (found_vulns stays as-is)
+        return
+
+    # Determine pool size
+    env_workers = os.getenv("CIFIV_WORKERS")
+    if env_workers and str(env_workers).isdigit():
+        max_workers = max(1, int(env_workers))
+    else:
+        import multiprocessing as _mp
+        max_workers = max(1, min(len(vuln_files), _mp.cpu_count() or 1))
+
+    # Prepare tasks
+    tasks = [(vp, metric_names, metrics_dir, output_dir, not_found_dir) for vp in vuln_files]
+
+    # Global sets for stable aggregation
+    global_seen_total = {m: set() for m in metric_names}
+    global_seen_found = {m: set() for m in metric_names}
+
+    from concurrent.futures import ProcessPoolExecutor, as_completed
+    completed = 0
+    with ProcessPoolExecutor(max_workers=max_workers) as pool:
+        futs = [pool.submit(_cifiv_process_vuln_file, t) for t in tasks]
+        for fut in as_completed(futs):
+            try:
+                res = fut.result()
+                st = res.get("seen_total", {}) if isinstance(res, dict) else {}
+                sf = res.get("seen_found", {}) if isinstance(res, dict) else {}
+                for m in metric_names:
+                    global_seen_total[m].update(st.get(m, []))
+                    global_seen_found[m].update(sf.get(m, []))
+                completed += 1
+            except Exception as e:
+                logging.info(f"Worker failed: {e}")
+
+    logging.info(f"Processed {completed}/{len(vuln_files)} vulnerability files in parallel")
+
+    # Update result.json once, after aggregation
     result_path = os.path.join(general_dir, "result.json")
     try:
         try:
-            with open(result_path, 'r', encoding='utf-8') as rf:
+            with open(result_path, "r", encoding="utf-8") as rf:
                 result_data = json.load(rf)
         except Exception:
             result_data = {}
 
-        for metric, counters in metric_counters.items():
-            # Preserve existing entry if present
+        if not isinstance(result_data, dict):
+            result_data = {}
+
+        for metric in metric_names:
             current = result_data.get(metric)
             if not isinstance(current, dict):
                 current = {}
 
-            # Always update found_vulns
-            current["found_vulns"] = counters["found_vulns"]
-
-            # Optionally set total_vulns (unless skipping per flag)
+            # Always set found_vulns
+            current["found_vulns"] = int(len(global_seen_found[metric]))
+            # Optionally set total_vulns (unless suppressed)
             if not skip_set_total:
-                current["total_vulns"] = counters["total_vulns"]
+                current["total_vulns"] = int(len(global_seen_total[metric]))
 
             result_data[metric] = current
 
-        with open(result_path, 'w', encoding='utf-8') as wf:
+        with open(result_path, "w", encoding="utf-8") as wf:
             json.dump(result_data, wf, indent=2, ensure_ascii=False)
         logging.info(f"Metric results written to {result_path}")
     except Exception as e:
         logging.info(f"Error writing result file {result_path}: {e}")
+
 
 
 def calculate_time_stats() -> dict:
@@ -666,30 +722,73 @@ def calculate_time_stats() -> dict:
 
     return summary
 
+def _methods_file_worker(path: str) -> int:
+    """Count methods (excluding project-level keys) in one metrics JSON file."""
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception as e:
+        logging.info(f"Failed to read {path}: {e}")
+        return 0
+
+    if not isinstance(data, dict):
+        return 0
+
+    NON_METHOD_KEYS = {"__project_metrics__"}
+    cnt = 0
+    for _file_path, functions in data.items():
+        if isinstance(functions, dict):
+            for k in functions.keys():
+                if k not in NON_METHOD_KEYS:
+                    cnt += 1
+    return cnt
+
+
+def _coverage_metric_worker(args) -> tuple[str, int]:
+    """Count total methods for a single metric directory (name, count)."""
+    metric_name, metric_path = args
+    total = 0
+    try:
+        for entry in os.listdir(metric_path):
+            if not entry.endswith('.json'):
+                continue
+            path = os.path.join(metric_path, entry)
+            try:
+                with open(path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+            except Exception as e:
+                logging.info(f"Failed to read {path}: {e}")
+                continue
+            if not isinstance(data, dict):
+                continue
+            for _code_path, funcs in data.items():
+                if isinstance(funcs, dict):
+                    total += len(funcs)
+    except Exception as e:
+        logging.info(f"Failed to scan {metric_path}: {e}")
+    return (metric_name, total)
+
+
 def calculate_total_number_of_methods():
     """
-    Iterate over all JSON files in data/metrics and count the total number
-    of methods. Keys used for project-level metrics are excluded from the
-    count.
+    Count methods across all JSON files in data/metrics in parallel.
 
-    Writes the total into data/general/methods_total.json and also updates
-    data/general/result.json with a top-level key "total_methods".
+    Parallelism:
+      - Environment variable TOTAL_METHODS_WORKERS (int >= 1)
+      - Default: min(#files, CPU cores)
 
-    Returns:
-        int: Total number of methods counted across all metric JSON files.
+    Writes:
+      - data/general/methods_total.json
+      - Also updates data/general/result.json top-level key "total_methods"
     """
     base = os.getcwd()
     metrics_dir = os.path.join(base, "data", "metrics")
     general_dir = os.path.join(base, "data", "general")
     os.makedirs(general_dir, exist_ok=True)
 
-    # Keys that are not methods and must be skipped
-    non_method_keys = {"__project_metrics__"}
-
-    total_methods = 0
-
+    # If directory is missing, keep previous behavior but also update result.json
     if not os.path.isdir(metrics_dir):
-        # still write outputs with zero
+        total_methods = 0
         methods_out = os.path.join(general_dir, "methods_total.json")
         try:
             with open(methods_out, 'w', encoding='utf-8') as f:
@@ -697,13 +796,14 @@ def calculate_total_number_of_methods():
         except Exception as e:
             logging.info(f"Error writing {methods_out}: {e}")
 
-        # also update result.json
         result_path = os.path.join(general_dir, "result.json")
         try:
             try:
                 with open(result_path, 'r', encoding='utf-8') as rf:
                     result_data = json.load(rf)
             except Exception:
+                result_data = {}
+            if not isinstance(result_data, dict):
                 result_data = {}
             result_data["total_methods"] = total_methods
             with open(result_path, 'w', encoding='utf-8') as wf:
@@ -712,28 +812,25 @@ def calculate_total_number_of_methods():
             logging.info(f"Error writing result file {result_path}: {e}")
         return total_methods
 
-    for entry in os.listdir(metrics_dir):
-        if not entry.endswith('.json'):
-            continue
-        path = os.path.join(metrics_dir, entry)
-        try:
-            with open(path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except Exception as e:
-            logging.info(f"Failed to read {path}: {e}")
-            continue
+    # Collect input files
+    files = [os.path.join(metrics_dir, e) for e in os.listdir(metrics_dir) if e.endswith(".json")]
+    if not files:
+        total_methods = 0
+    else:
+        env_workers = os.getenv("TOTAL_METHODS_WORKERS")
+        if env_workers and str(env_workers).isdigit():
+            max_workers = max(1, int(env_workers))
+        else:
+            max_workers = min(len(files), max(1, mp.cpu_count() or 1))
 
-        if not isinstance(data, dict):
-            continue
-
-        for _file_path, functions in data.items():
-            if not isinstance(functions, dict):
-                continue
-            # count keys minus non-method keys
-            for k in functions.keys():
-                if k in non_method_keys:
-                    continue
-                total_methods += 1
+        total_methods = 0
+        with ProcessPoolExecutor(max_workers=max_workers) as pool:
+            futs = [pool.submit(_methods_file_worker, p) for p in files]
+            for fut in as_completed(futs):
+                try:
+                    total_methods += int(fut.result() or 0)
+                except Exception as e:
+                    logging.info(f"Worker failed (methods count): {e}")
 
     # Write consolidated outputs
     methods_out = os.path.join(general_dir, "methods_total.json")
@@ -744,7 +841,24 @@ def calculate_total_number_of_methods():
     except Exception as e:
         logging.info(f"Error writing {methods_out}: {e}")
 
+    # Update result.json top-level "total_methods" for convenience
+    result_path = os.path.join(general_dir, "result.json")
+    try:
+        try:
+            with open(result_path, 'r', encoding='utf-8') as rf:
+                result_data = json.load(rf)
+        except Exception:
+            result_data = {}
+        if not isinstance(result_data, dict):
+            result_data = {}
+        result_data["total_methods"] = total_methods
+        with open(result_path, 'w', encoding='utf-8') as wf:
+            json.dump(result_data, wf, indent=2, ensure_ascii=False)
+    except Exception as e:
+        logging.info(f"Error writing result file {result_path}: {e}")
+
     return total_methods
+
 
 def delete_not_found_vulns_from_result():
     """
@@ -819,13 +933,15 @@ def delete_not_found_vulns_from_result():
 def calculate_code_coverage() -> dict:
     """
     Traverse data/single-metrics and count, for each metric, how many methods
-    exist across all its JSON files. Write the counts into
-    data/general/result.json under each metric as "total_methods" and compute
-    a "coverage" value per metric as total_methods / methods_total (from
-    data/general/methods_total.json).
+    exist across all its JSON files. Counting per metric runs in parallel.
 
-    Returns:
-        dict: Mapping of metric name -> total method count
+    Parallelism:
+      - Environment variable CODE_COVERAGE_WORKERS (int >= 1)
+      - Default: min(#metric_dirs, CPU cores)
+
+    Writes per metric into data/general/result.json:
+      - "total_methods"
+      - "coverage" (total_methods / global methods_total)
     """
     base = os.getcwd()
 
@@ -844,34 +960,28 @@ def calculate_code_coverage() -> dict:
     if not os.path.isdir(single_metrics_dir):
         logging.info(f"Single-metrics directory not found: {single_metrics_dir}")
     else:
-        # Iterate each metric directory
+        # Prepare (metric_name, metric_path) tasks
+        metric_tasks: list[tuple[str, str]] = []
         for metric_name in os.listdir(single_metrics_dir):
             metric_path = os.path.join(single_metrics_dir, metric_name)
-            if not os.path.isdir(metric_path):
-                continue
+            if os.path.isdir(metric_path):
+                metric_tasks.append((metric_name, metric_path))
 
-            total = 0
-            # Iterate all JSON files for this metric
-            for entry in os.listdir(metric_path):
-                if not entry.endswith('.json'):
-                    continue
-                path = os.path.join(metric_path, entry)
-                try:
-                    with open(path, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                except Exception as e:
-                    logging.info(f"Failed to read {path}: {e}")
-                    continue
+        if metric_tasks:
+            env_workers = os.getenv("CODE_COVERAGE_WORKERS")
+            if env_workers and str(env_workers).isdigit():
+                max_workers = max(1, int(env_workers))
+            else:
+                max_workers = min(len(metric_tasks), max(1, mp.cpu_count() or 1))
 
-                if not isinstance(data, dict):
-                    continue
-
-                # data: code_path -> { function_name -> {metric_name: value} }
-                for _code_path, funcs in data.items():
-                    if isinstance(funcs, dict):
-                        total += len(funcs)
-
-            counts[metric_name] = total
+            with ProcessPoolExecutor(max_workers=max_workers) as pool:
+                futs = [pool.submit(_coverage_metric_worker, t) for t in metric_tasks]
+                for fut in as_completed(futs):
+                    try:
+                        name, total = fut.result()
+                        counts[name] = int(total or 0)
+                    except Exception as e:
+                        logging.info(f"Worker failed (coverage count): {e}")
 
     # Read global methods total for coverage calculation
     methods_total_path = os.path.join(general_dir, "methods_total.json")
@@ -905,7 +1015,6 @@ def calculate_code_coverage() -> dict:
                 entry = {}
             entry["total_methods"] = int(cnt)
 
-            # Compute coverage if possible
             coverage = None
             if isinstance(global_total_methods, int) and global_total_methods > 0:
                 try:
@@ -926,6 +1035,7 @@ def calculate_code_coverage() -> dict:
         logging.info(f"Error writing result file {result_path}: {e}")
 
     return counts
+
 
 def calculate_lift():
     """
