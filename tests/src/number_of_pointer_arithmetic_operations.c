@@ -1,5 +1,7 @@
 #include <stddef.h>
 
+typedef struct { int m; } S;
+
 // Binary pointer arithmetic operations
 void binaryPlus() {
     int arr[] = {1, 2, 3, 4, 5};
@@ -77,4 +79,58 @@ void pointerDifference() {
     int *ptr2 = arr + 4;
     
     ptrdiff_t diff = ptr2 - ptr1;  // 1 operation
+}
+
+void pointerAssignmentNoArith() {
+    int arr[] = {1, 2, 3, 4, 5};
+    int *p = arr;        // assignment without arithmetic
+    int *q = p;          // pointer copy
+}
+
+void pointerComparisonNoArith() {
+    int arr[] = {1, 2, 3, 4, 5};
+    int *p = arr;
+    int *q = p;           // no arithmetic here
+    if (p == q) {}
+    if (p != q) {}
+    if (p < q) {}
+}
+
+void addressOfNoArith() {
+    int a = 42;
+    int *p = &a;         // taking address is not arithmetic
+}
+
+void dereferenceNoArith() {
+    int a = 0;
+    int *p = &a;
+    *p = 5;              // dereference store, no arithmetic
+}
+
+void arrayIndexingNoArith() {
+    int arr[] = {1, 2, 3, 4, 5};
+    int *p = arr;
+    int x = arr[2];      // indexing is not counted as arithmetic here
+    p[1] = 7;            // likewise
+}
+
+void pointerCastNoArith() {
+    int arr[] = {1, 2, 3};
+    int *p = arr;
+    char *cp = (char *)p;  // cast only, no arithmetic
+    (void)cp;
+}
+
+// Member access via pointer (should be counted)
+void pointerMemberAccess() {
+    S s; S *p = &s;
+    int x = p->m;  // 1 operation (->)
+    p->m = x;      // 1 operation (->)
+}
+
+// Member access with dot (not via pointer) should NOT be counted
+void structMemberDotNoArith() {
+    S s;
+    int x = s.m;   // not pointer arithmetic
+    s.m = x;       // not pointer arithmetic
 }

@@ -1,5 +1,7 @@
 #include <stddef.h>
 
+typedef struct { int m; } S;
+
 void oneUnaryPointer(int *ptr) {
     ptr++;
 }
@@ -53,4 +55,56 @@ void pointerDifference() {
     int *ptr2 = arr + 4;
     
     ptrdiff_t diff = ptr2 - ptr1;  // 1 operation
+}
+
+void pointerAssignment_no_arith(int *p, int *q) {
+    // Simple pointer-to-pointer assignment is not arithmetic
+    p = q;
+}
+
+void pointerCast_no_arith(int *p) {
+    // Casting a pointer type is not arithmetic
+    void *v = (void*)p;
+    (void)v;
+}
+
+void pointerAddressOf_no_arith() {
+    // Taking the address of a variable is not pointer arithmetic
+    int x = 0;
+    int *p = &x;
+    (void)p;
+}
+
+void pointerDereference_no_arith(int *p) {
+    // Dereferencing a pointer is not arithmetic
+    int x = *p;
+    (void)x;
+}
+
+void pointerCompare_no_arith(int *p, int *q) {
+    // Comparing pointers is not arithmetic
+    if (p == q) {
+        // no-op
+    }
+}
+
+void notPointerTypes_no_arith() {
+    // Integer arithmetic should not be counted for pointer metrics
+    int a = 1, b = 2;
+    int c = a + b;
+    (void)c;
+}
+
+// Member access via pointer: only the base pointer variable should be counted
+void pointerMemberAccess_vars() {
+    S s; S *p = &s;
+    int x = p->m;  // involves pointer variable p
+    p->m = x;      // involves pointer variable p
+}
+
+// Dot access (non-pointer) should not contribute
+void structMemberDotNoArith_vars() {
+    S s;
+    int x = s.m;
+    s.m = x;
 }

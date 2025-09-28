@@ -150,3 +150,39 @@ void ifElseControlStructure(int a) {
         }
     }
 }
+
+// Added cases to cover SWITCH_STMT and DO_STMT for the
+// maximum of control-dependent control structures metric
+void switchOnly(int a) {
+    switch (a) {
+        case 0:
+            printf("zero\n");
+            break;
+        case 1:
+            printf("one\n");
+            break;
+        default:
+            printf("other\n");
+            break;
+    }
+}
+
+void switchWithIf(int a) {
+    switch (a) {
+        case 0:
+            if (a >= 0) {
+                printf("non-negative\n");
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+void doWhileWithIf(int a) {
+    do {
+        if (a > 0) {
+            a--;
+        }
+    } while (a > 0);
+}

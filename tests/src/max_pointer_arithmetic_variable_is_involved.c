@@ -1,5 +1,7 @@
 #include <stdio.h>
 
+typedef struct { int m; } S;
+
 void oneUnaryPointer(int *ptr) {
     ptr++;
 }
@@ -45,3 +47,7 @@ void pointerArithmetic(int *base, int offset) {
     result -= 2;
 }
 
+void pointerMemberAccessMax(S *p) {
+    int x = p->m; // p involved once
+    p->m = x;     // p involved twice
+}

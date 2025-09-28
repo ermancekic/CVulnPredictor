@@ -10,27 +10,42 @@ from clang.cindex import TokenKind, CursorKind, TypeKind
 
 def calculate_cyclomatic_complexity(cursor):
     """
-    Approximate cyclomatic complexity by counting decision points and entry.
+    Cyclomatic complexity based on AST control-flow nodes.
+    Counts one for function entry plus a point for each of:
+      - If/For/While/Do statements
+      - Case labels (switch)
+      - Ternary conditional operator (?:)
+      - C++ catch statements
 
     Args:
         cursor (cindex.Cursor): Clang cursor for the function or method.
-
     Returns:
-        int: Cyclomatic complexity (count of branches plus one).
+        int: Cyclomatic complexity (approximate McCabe number).
     """
-    tu = cursor.translation_unit
     complexity = 1  # entry point
-
-    for tok in tu.get_tokens(extent=cursor.extent):
-        try:
-            s = tok.spelling
-        except Exception:
-            continue
-        if tok.kind == TokenKind.KEYWORD and s in ('if', 'for', 'while', 'case', 'catch'):
+    decision_kinds = {
+        CursorKind.IF_STMT,
+        CursorKind.FOR_STMT,
+        CursorKind.WHILE_STMT,
+        CursorKind.DO_STMT,
+        CursorKind.CASE_STMT,
+    }
+    
+    CK_COND = getattr(CursorKind, 'CONDITIONAL_OPERATOR', None)
+    CK_CATCH = getattr(CursorKind, 'CXX_CATCH_STMT', None)
+    
+    def visit(node):
+        nonlocal complexity
+        k = node.kind
+        if k in decision_kinds:
             complexity += 1
-        elif tok.kind == TokenKind.PUNCTUATION and s == '?':
+        elif CK_COND is not None and k == CK_COND:
             complexity += 1
-
+        elif CK_CATCH is not None and k == CK_CATCH:
+            complexity += 1
+        for child in node.get_children():
+            visit(child)
+    visit(cursor)
     return complexity
 
 
@@ -191,9 +206,10 @@ def calculate_number_of_pointer_arithmetic(cursor):
         int: Number of pointer arithmetic operations (binary, unary, compound) in the function.
     """
     count = 0
-    binary_arithmetic_ops = {'+', '-', '/', '^', '|'}
-    compound_pointer_ops = {'+=', '-=', '*=', '/=', '^=', '&=', '|='}
-    unary_pointer_ops = {'++', '--'}
+    # LEOPARD: restrict to valid pointer arithmetic operators
+    binary_arithmetic_ops = {'+', '-'}            # pointer +/- integer, pointer - pointer
+    compound_pointer_ops = {'+=', '-='}           # pointer += integer, pointer -= integer
+    unary_pointer_ops = {'++', '--'}              # ++ptr, --ptr
 
     def visit(node, parent=None):
         nonlocal count
@@ -205,13 +221,13 @@ def calculate_number_of_pointer_arithmetic(cursor):
                 rhs_kind = rhs.type.kind
                 is_ptr_int_combo = ((lhs_kind == TypeKind.POINTER and rhs_kind != TypeKind.POINTER) or
                                     (rhs_kind == TypeKind.POINTER and lhs_kind != TypeKind.POINTER))
-                is_ptr_ptr_sub = (lhs_kind == TypeKind.POINTER and rhs_kind == TypeKind.POINTER)
+                is_ptr_ptr_combo = (lhs_kind == TypeKind.POINTER and rhs_kind == TypeKind.POINTER)
                 if is_ptr_int_combo:
                     for tok in node.get_tokens():
                         if tok.kind == TokenKind.PUNCTUATION and tok.spelling in binary_arithmetic_ops:
                             count += 1
                             break
-                elif is_ptr_ptr_sub and lhs.kind != CursorKind.BINARY_OPERATOR and rhs.kind != CursorKind.BINARY_OPERATOR:
+                elif is_ptr_ptr_combo and lhs.kind != CursorKind.BINARY_OPERATOR and rhs.kind != CursorKind.BINARY_OPERATOR:
                     for tok in node.get_tokens():
                         if tok.kind == TokenKind.PUNCTUATION and tok.spelling == '-':
                             count += 1
@@ -231,11 +247,25 @@ def calculate_number_of_pointer_arithmetic(cursor):
             children = list(node.get_children())
             if len(children) == 1:
                 child = children[0]
+                # ++p / --p on a pointer
                 if child.type.kind == TypeKind.POINTER:
                     for tok in node.get_tokens():
                         if tok.kind == TokenKind.PUNCTUATION and tok.spelling in unary_pointer_ops:
                             count += 1
                             break
+                # *p (dereference) -> treated as pointer arithmetic by LEOPARD
+                for tok in node.get_tokens():
+                    if tok.kind == TokenKind.PUNCTUATION and tok.spelling == '*':
+                        # Only count if operand is a pointer
+                        if child.type.kind == TypeKind.POINTER:
+                            count += 1
+                        break
+        elif node.kind == CursorKind.MEMBER_REF_EXPR:
+            # p->m (member access via pointer)
+            for tok in node.get_tokens():
+                if tok.kind == TokenKind.PUNCTUATION and tok.spelling == '->':
+                    count += 1
+                    break
         for child in node.get_children():
             visit(child, node)
 
@@ -256,13 +286,26 @@ def calculate_number_of_variables_involved_in_pointer_arithmetic(cursor):
     """
     vars_involved = set()
 
-    def collect_vars(subnode):
-        if subnode.kind in (CursorKind.DECL_REF_EXPR, CursorKind.MEMBER_REF_EXPR):
+    # Only collect variable identifiers (exclude field names from MEMBER_REF_EXPR)
+    def collect_declref_vars(subnode):
+        if subnode.kind == CursorKind.DECL_REF_EXPR:
             ref = subnode.referenced
-            if ref is not None and ref.kind in (CursorKind.VAR_DECL, CursorKind.PARM_DECL, CursorKind.FIELD_DECL):
+            if ref is not None and ref.kind in (CursorKind.VAR_DECL, CursorKind.PARM_DECL):
                 vars_involved.add(subnode.spelling)
         for child in subnode.get_children():
-            collect_vars(child)
+            collect_declref_vars(child)
+
+    # Only treat the following operators as true pointer arithmetic
+    bin_ops_ptr_int = {'+', '-'}
+    bin_ops_ptr_ptr = {'-'}
+    compound_ops = {'+=', '-='}
+    unary_ops = {'++', '--'}
+
+    def _node_has_any_op(node, ops: set[str]) -> bool:
+        for tok in node.get_tokens():
+            if tok.kind == TokenKind.PUNCTUATION and tok.spelling in ops:
+                return True
+        return False
 
     def visit(node):
         if node.kind == CursorKind.BINARY_OPERATOR:
@@ -271,31 +314,57 @@ def calculate_number_of_variables_involved_in_pointer_arithmetic(cursor):
                 lhs, rhs = children
                 lhs_kind = lhs.type.kind
                 rhs_kind = rhs.type.kind
-                is_ptr_int_combo = ((lhs_kind == TypeKind.POINTER and rhs_kind != TypeKind.POINTER) or
-                                    (rhs_kind == TypeKind.POINTER and lhs_kind != TypeKind.POINTER))
-                is_ptr_ptr_sub = (lhs_kind == TypeKind.POINTER and rhs_kind == TypeKind.POINTER)
-                if is_ptr_int_combo:
+
+                # pointer +/- integer
+                is_ptr_int_combo = (
+                    (lhs_kind == TypeKind.POINTER and rhs_kind != TypeKind.POINTER) or
+                    (rhs_kind == TypeKind.POINTER and lhs_kind != TypeKind.POINTER)
+                )
+                # pointer - pointer
+                is_ptr_ptr_combo = (lhs_kind == TypeKind.POINTER and rhs_kind == TypeKind.POINTER)
+
+                if is_ptr_int_combo and _node_has_any_op(node, bin_ops_ptr_int):
                     if lhs_kind == TypeKind.POINTER:
-                        collect_vars(lhs)
+                        collect_declref_vars(lhs)
                     else:
-                        collect_vars(rhs)
-                elif is_ptr_ptr_sub and lhs.kind != CursorKind.BINARY_OPERATOR and rhs.kind != CursorKind.BINARY_OPERATOR:
-                    collect_vars(lhs)
-                    collect_vars(rhs)
+                        collect_declref_vars(rhs)
+                elif is_ptr_ptr_combo and lhs.kind != CursorKind.BINARY_OPERATOR and rhs.kind != CursorKind.BINARY_OPERATOR and _node_has_any_op(node, bin_ops_ptr_ptr):
+                    # Only subtraction of pointers is valid pointer arithmetic
+                    collect_declref_vars(lhs)
+                    collect_declref_vars(rhs)
+
         elif node.kind == CursorKind.COMPOUND_ASSIGNMENT_OPERATOR:
             children = list(node.get_children())
-            if len(children) == 2:
+            if len(children) == 2 and _node_has_any_op(node, compound_ops):
                 lhs, rhs = children
                 lhs_kind = lhs.type.kind
                 rhs_kind = rhs.type.kind
                 if lhs_kind == TypeKind.POINTER and rhs_kind != TypeKind.POINTER:
-                    collect_vars(lhs)
+                    collect_declref_vars(lhs)
+
         elif node.kind == CursorKind.UNARY_OPERATOR:
             children = list(node.get_children())
             if len(children) == 1:
                 child = children[0]
-                if child.type.kind == TypeKind.POINTER:
-                    collect_vars(child)
+                # ++p / --p
+                if _node_has_any_op(node, unary_ops) and child.type.kind == TypeKind.POINTER:
+                    collect_declref_vars(child)
+                # *p (dereference)
+                for tok in node.get_tokens():
+                    if tok.kind == TokenKind.PUNCTUATION and tok.spelling == '*':
+                        if child.type.kind == TypeKind.POINTER:
+                            collect_declref_vars(child)
+                        break
+
+        elif node.kind == CursorKind.MEMBER_REF_EXPR:
+            # p->m: collect the base pointer variable (left-hand side)
+            has_arrow = any(tok.kind == TokenKind.PUNCTUATION and tok.spelling == '->' for tok in node.get_tokens())
+            if has_arrow:
+                children = list(node.get_children())
+                if children:
+                    # Heuristic: first child is the base expression; collect variables from it
+                    collect_declref_vars(children[0])
+
         for child in node.get_children():
             visit(child)
 
@@ -314,18 +383,27 @@ def calculate_max_pointer_arithmetic_variable_is_involved_in(cursor):
     Returns:
         int: Maximum number of pointer arithmetic operations for any single variable.
     """
-    var_counts = {}
+    var_counts: dict[str, int] = {}
 
-    def collect_vars(subnode):
-        if subnode.kind in (CursorKind.DECL_REF_EXPR, CursorKind.MEMBER_REF_EXPR):
+    def bump_vars(subnode):
+        if subnode.kind == CursorKind.DECL_REF_EXPR:
             ref = subnode.referenced
-            if ref is not None and ref.kind in (CursorKind.VAR_DECL, CursorKind.PARM_DECL, CursorKind.FIELD_DECL):
+            if ref is not None and ref.kind in (CursorKind.VAR_DECL, CursorKind.PARM_DECL):
                 name = subnode.spelling
-                if name not in var_counts:
-                    var_counts[name] = 0
-                var_counts[name] += 1
+                var_counts[name] = var_counts.get(name, 0) + 1
         for child in subnode.get_children():
-            collect_vars(child)
+            bump_vars(child)
+
+    bin_ops_ptr_int = {'+', '-'}
+    bin_ops_ptr_ptr = {'-'}
+    compound_ops = {'+=', '-='}
+    unary_ops = {'++', '--'}
+
+    def _node_has_any_op(node, ops: set[str]) -> bool:
+        for tok in node.get_tokens():
+            if tok.kind == TokenKind.PUNCTUATION and tok.spelling in ops:
+                return True
+        return False
 
     def visit(node):
         if node.kind == CursorKind.BINARY_OPERATOR:
@@ -338,29 +416,43 @@ def calculate_max_pointer_arithmetic_variable_is_involved_in(cursor):
                     (lhs_kind == TypeKind.POINTER and rhs_kind != TypeKind.POINTER) or
                     (rhs_kind == TypeKind.POINTER and lhs_kind != TypeKind.POINTER)
                 )
-                is_ptr_ptr_sub = (lhs_kind == TypeKind.POINTER and rhs_kind == TypeKind.POINTER)
-                if is_ptr_int_combo:
+                is_ptr_ptr_combo = (lhs_kind == TypeKind.POINTER and rhs_kind == TypeKind.POINTER)
+                if is_ptr_int_combo and _node_has_any_op(node, bin_ops_ptr_int):
                     if lhs_kind == TypeKind.POINTER:
-                        collect_vars(lhs)
+                        bump_vars(lhs)
                     else:
-                        collect_vars(rhs)
-                elif is_ptr_ptr_sub and lhs.kind != CursorKind.BINARY_OPERATOR and rhs.kind != CursorKind.BINARY_OPERATOR:
-                    collect_vars(lhs)
-                    collect_vars(rhs)
+                        bump_vars(rhs)
+                elif is_ptr_ptr_combo and lhs.kind != CursorKind.BINARY_OPERATOR and rhs.kind != CursorKind.BINARY_OPERATOR and _node_has_any_op(node, bin_ops_ptr_ptr):
+                    bump_vars(lhs)
+                    bump_vars(rhs)
         elif node.kind == CursorKind.COMPOUND_ASSIGNMENT_OPERATOR:
             children = list(node.get_children())
-            if len(children) == 2:
+            if len(children) == 2 and _node_has_any_op(node, compound_ops):
                 lhs, rhs = children
                 lhs_kind = lhs.type.kind
                 rhs_kind = rhs.type.kind
                 if lhs_kind == TypeKind.POINTER and rhs_kind != TypeKind.POINTER:
-                    collect_vars(lhs)
+                    bump_vars(lhs)
         elif node.kind == CursorKind.UNARY_OPERATOR:
             children = list(node.get_children())
             if len(children) == 1:
                 child = children[0]
-                if child.type.kind == TypeKind.POINTER:
-                    collect_vars(child)
+                # ++p / --p
+                if _node_has_any_op(node, unary_ops) and child.type.kind == TypeKind.POINTER:
+                    bump_vars(child)
+                # *p (dereference)
+                for tok in node.get_tokens():
+                    if tok.kind == TokenKind.PUNCTUATION and tok.spelling == '*':
+                        if child.type.kind == TypeKind.POINTER:
+                            bump_vars(child)
+                        break
+        elif node.kind == CursorKind.MEMBER_REF_EXPR:
+            # p->m: bump base pointer variable
+            has_arrow = any(tok.kind == TokenKind.PUNCTUATION and tok.spelling == '->' for tok in node.get_tokens())
+            if has_arrow:
+                children = list(node.get_children())
+                if children:
+                    bump_vars(children[0])
         for child in node.get_children():
             visit(child)
 
