@@ -136,37 +136,29 @@ def print_json(solution, source_path):
 def get_source_files(source_path, *, skip_dirs=None):
     """
     Recursively collect all C/C++ source file paths under the given directory.
-    Skips broken symlinks and common test/third_party dirs by default.
     """
     source_path = os.path.abspath(source_path)
     source_files = []
 
-    # Standardmäßig noisy/verursachende Ordner ausschließen
-    default_skips = {
-        'internal', 'third_party', 'thirdparty', 'tests', 'test',
-        'googletest', 'gtest', 'benchmark', 'benchmarks', 'examples', 'tools',
-        # Common build/output/vendor dirs
-        'build', 'out', 'bin', 'obj', 'lib', 'CMakeFiles',
-        'cmake-build-debug', 'cmake-build-release', 'Debug', 'Release',
-        'node_modules', 'dist', 'vendor', '.git'
-    }
-    skip_dirs = set(skip_dirs or []) | default_skips
+    # Use only the user-provided skip_dirs. If None, no directories are skipped.
+    skip_dirs = set(skip_dirs or [])
 
     if os.path.isdir(source_path):
         for root, dirs, files in os.walk(source_path, followlinks=False):
-            # Verzeichnisse filtern (in-place, wirkt auf os.walk)
-            dirs[:] = [d for d in dirs if d not in skip_dirs]
+            # Filter directories in-place according to skip_dirs
+            if skip_dirs:
+                dirs[:] = [d for d in dirs if d not in skip_dirs]
 
             for f in files:
                 if not f.endswith((".c", ".cc", ".cpp", ".cxx", ".h", ".hpp", ".hh", ".hxx")):
                     continue
                 path = os.path.join(root, f)
 
-                # Nur reguläre existierende Dateien behalten
+                # Keep only regular existing files; skip broken symlinks
                 if not os.path.exists(path):
                     continue
                 if os.path.islink(path) and not os.path.exists(os.path.realpath(path)):
-                    # Kaputter Symlink
+                    # Broken symlink
                     continue
                 if not os.path.isfile(path):
                     continue

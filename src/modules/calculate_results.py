@@ -391,7 +391,7 @@ def _cifiv_process_vuln_file(args):
     stable counters without double-counting.
 
     Args:
-        args: (vuln_path, metric_names, metrics_dir, output_dir, not_found_dir)
+        args: (vuln_path, metric_names, metrics_dir, output_dir, not_found_dir, skip_writes)
 
     Returns:
         dict[str, dict[str, list[str]]]:
@@ -400,7 +400,7 @@ def _cifiv_process_vuln_file(args):
               "seen_found": {metric: [sm_key, ...]}
             }
     """
-    (vuln_path, metric_names, metrics_dir, output_dir, not_found_dir) = args
+    (vuln_path, metric_names, metrics_dir, output_dir, not_found_dir, skip_writes) = args
 
     seen_total = {m: set() for m in metric_names}
     seen_found = {m: set() for m in metric_names}
@@ -484,41 +484,47 @@ def _cifiv_process_vuln_file(args):
 
                         # We have a match
                         match_found = True
-                        out_path = os.path.join(output_dir, metric_name, target_file_name)
-                        try:
-                            with open(out_path, "r", encoding="utf-8") as of:
-                                out_data = json.load(of)
-                        except Exception:
-                            out_data = {}
+                        # Skip file writes when requested
+                        if not skip_writes:
+                            out_path = os.path.join(output_dir, metric_name, target_file_name)
+                            try:
+                                with open(out_path, "r", encoding="utf-8") as of:
+                                    out_data = json.load(of)
+                            except Exception:
+                                out_data = {}
 
-                        log_param_count = vuln_param_count if vuln_param_count is not None else sig_param_count
-                        log_param_types = (
-                            vuln_param_types if (vuln_param_types not in (None, [])) else (sig_param_types or [])
-                        )
+                            log_param_count = (
+                                vuln_param_count if vuln_param_count is not None else sig_param_count
+                            )
+                            log_param_types = (
+                                vuln_param_types
+                                if (vuln_param_types not in (None, []))
+                                else (sig_param_types or [])
+                            )
 
-                        found_entry = {
-                            "id": local_id,
-                            "function": func_name,
-                            "signature": loc_func_raw,
-                            "param_count": log_param_count,
-                            "param_types": log_param_types,
-                            "metrics_signature": sig,
-                            "metrics_param_count": sig_param_count,
-                            "metrics_param_types": sig_param_types if sig_param_types is not None else [],
-                        }
-                        out_data.setdefault(code_path, {}).setdefault(sig_base, []).append(found_entry)
+                            found_entry = {
+                                "id": local_id,
+                                "function": func_name,
+                                "signature": loc_func_raw,
+                                "param_count": log_param_count,
+                                "param_types": log_param_types,
+                                "metrics_signature": sig,
+                                "metrics_param_count": sig_param_count,
+                                "metrics_param_types": sig_param_types if sig_param_types is not None else [],
+                            }
+                            out_data.setdefault(code_path, {}).setdefault(sig_base, []).append(found_entry)
 
-                        try:
-                            with open(out_path, "w", encoding="utf-8") as of:
-                                json.dump(out_data, of, indent=2, ensure_ascii=False)
-                        except Exception as e:
-                            logging.info(f"Error writing {out_path}: {e}")
+                            try:
+                                with open(out_path, "w", encoding="utf-8") as of:
+                                    json.dump(out_data, of, indent=2, ensure_ascii=False)
+                            except Exception as e:
+                                logging.info(f"Error writing {out_path}: {e}")
 
                         # Update per-metric found set
                         seen_found[metric_name].add(sm_key)
 
             # If no match for this metric: write not-found entry
-            if not match_found:
+            if not match_found and not skip_writes:
                 nf_path = os.path.join(not_found_dir, metric_name, target_file_name)
                 try:
                     with open(nf_path, "r", encoding="utf-8") as nf:
@@ -566,10 +572,27 @@ def check_if_function_in_vulns(skip_set_total: bool = False):
     os.makedirs(general_dir, exist_ok=True)
     os.makedirs(not_found_dir, exist_ok=True)
 
+    def _dir_has_any_file(path: str) -> bool:
+        try:
+            for root, _dirs, files in os.walk(path):
+                if files:
+                    return True
+        except Exception:
+            return False
+        return False
+
+    # If target folders already contain files, skip writing into them
+    skip_writes = _dir_has_any_file(output_dir) or _dir_has_any_file(not_found_dir)
+    if skip_writes:
+        logging.info(
+            "found-methods/ or not-found-methods/ already contain files; will not write to them in this run"
+        )
+
     # Enumerate metrics and ensure target directories exist
     metric_names = [m for m in os.listdir(metrics_dir) if os.path.isdir(os.path.join(metrics_dir, m))] \
                    if os.path.isdir(metrics_dir) else []
     for metric_name in metric_names:
+        # Ensure subdirectories exist; harmless if we skip writes
         os.makedirs(os.path.join(output_dir, metric_name), exist_ok=True)
         os.makedirs(os.path.join(not_found_dir, metric_name), exist_ok=True)
 
@@ -591,7 +614,7 @@ def check_if_function_in_vulns(skip_set_total: bool = False):
         max_workers = max(1, min(len(vuln_files), _mp.cpu_count() or 1))
 
     # Prepare tasks
-    tasks = [(vp, metric_names, metrics_dir, output_dir, not_found_dir) for vp in vuln_files]
+    tasks = [(vp, metric_names, metrics_dir, output_dir, not_found_dir, skip_writes) for vp in vuln_files]
 
     # Global sets for stable aggregation
     global_seen_total = {m: set() for m in metric_names}
@@ -858,7 +881,6 @@ def calculate_total_number_of_methods():
         logging.info(f"Error writing result file {result_path}: {e}")
 
     return total_methods
-
 
 def delete_not_found_vulns_from_result():
     """
@@ -1230,15 +1252,17 @@ def save_result_state():
 
 def delete_not_found_vulns_from_metrics_dir():
     """
-    Iterate over all JSON files in `data/not-found-methods/LinesNew` and delete
-    any files in `data/metrics` that share the same file name.
+    Iterate over all JSON files in `data/not-found-methods/LinesNew` and move
+    any files in `data/metrics` that share the same file name into
+    `data/deleted` instead of deleting them.
 
     Returns:
-        int: Number of deleted files in `data/metrics`.
+        int: Number of moved files from `data/metrics` to `data/deleted`.
     """
     base = os.getcwd()
     not_found_linesnew_dir = os.path.join(base, "data", "not-found-methods", "LinesNew")
     metrics_dir = os.path.join(base, "data", "metrics")
+    deleted_dir = os.path.join(base, "data", "deleted")
 
     if not os.path.isdir(not_found_linesnew_dir):
         logging.info(f"Not-found directory not present: {not_found_linesnew_dir}")
@@ -1247,26 +1271,42 @@ def delete_not_found_vulns_from_metrics_dir():
         logging.info(f"Metrics directory not present: {metrics_dir}")
         return 0
 
+    # Ensure the target directory for moved files exists
+    try:
+        os.makedirs(deleted_dir, exist_ok=True)
+    except Exception as e:
+        logging.info(f"Failed to ensure deleted dir {deleted_dir}: {e}")
+        return 0
+
     try:
         candidates = [e for e in os.listdir(not_found_linesnew_dir) if e.endswith('.json')]
     except Exception as e:
         logging.info(f"Failed to list {not_found_linesnew_dir}: {e}")
         return 0
 
-    deleted = 0
+    moved = 0
     for name in candidates:
         target_path = os.path.join(metrics_dir, name)
         try:
             if os.path.isfile(target_path):
-                os.remove(target_path)
-                deleted += 1
+                # Compute a destination path; avoid overwriting existing files
+                dest_path = os.path.join(deleted_dir, name)
+                if os.path.exists(dest_path):
+                    root, ext = os.path.splitext(name)
+                    # Add a timestamp-based suffix to keep files distinct
+                    import time as _time
+                    dest_path = os.path.join(deleted_dir, f"{root}_{int(_time.time())}{ext}")
+
+                import shutil as _shutil
+                _shutil.move(target_path, dest_path)
+                moved += 1
         except Exception as e:
             logging.info(f"Failed to delete {target_path}: {e}")
 
     logging.info(
-        f"Deleted {deleted}/{len(candidates)} matching metrics files based on not-found LinesNew entries"
+        f"Moved {moved}/{len(candidates)} matching metrics files to {deleted_dir} based on not-found LinesNew entries"
     )
-    return deleted
+    return moved
 
 
 def plot_graphs():
