@@ -276,6 +276,9 @@ def parse_file(source_file, project_name):
             '-Wno-pragma-once-outside-header',
         ])
 
+        # Needed for macro filtering; brings macro definition/instantiation cursors into the AST
+        args.extend(['-Xclang', '-detailed-preprocessing-record'])
+
         tu = index.parse(
             source_file,
             args=args,
@@ -634,6 +637,8 @@ def run_test(source_file, metric_function):
                 "-Wno-unknown-attributes",
                 "-Wno-pragma-once-outside-header",
             ])
+
+            args.extend(["-Xclang", "-detailed-preprocessing-record"])
 
             tu = index.parse(path, args=args, options=TranslationUnit.PARSE_INCOMPLETE)
             return tu

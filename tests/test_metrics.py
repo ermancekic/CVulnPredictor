@@ -264,7 +264,7 @@ def test_project_metrics_num_changes():
     """
     file_path = os.path.join(os.getcwd(), "tests", "TestWorkspace", "TestFile.c")
     value = project_metrics.calculate_num_changes(file_path)
-    assert value == 4, f"Expected 4 commits but got {value} for {file_path}"
+    assert value == 5, f"Expected 5 commits but got {value} for {file_path}"
 
 
 def test_project_metrics_lines_changed():
@@ -318,3 +318,47 @@ def test_maximum_nesting_level_of_control_structures():
         assert testResult[i][1] == trueResult[i], (
             f"Expected {trueResult[i]} but got {testResult[i][1]} for function {testResult[i][0]}"
         )
+
+def test_macro_from_libs_get_ignored():
+    """
+    Ensure that macros from included libraries do not interfere with the metrics.
+    """
+    sourceCode = os.path.join(os.getcwd(), "tests", "src", "system_header_test.c")
+
+    expectations = {
+        "number_of_if_structures_without_else": (calculate_metrics.calculate_number_of_if_structures_without_else, 2),
+        "cyclomatic_complexity": (calculate_metrics.calculate_cyclomatic_complexity, 3),
+        "number_of_loops": (calculate_metrics.calculate_number_of_loops, 0),
+        "number_of_nested_loops": (calculate_metrics.calculate_number_of_nested_loops, 0),
+        "max_nesting_loop_depth": (calculate_metrics.calculate_max_nesting_loop_depth, 0),
+        "number_of_pointer_arithmetic": (calculate_metrics.calculate_number_of_pointer_arithmetic, 0),
+        "number_of_variables_involved_in_pointer_arithmetic": (
+            calculate_metrics.calculate_number_of_variables_involved_in_pointer_arithmetic,
+            0,
+        ),
+        "number_of_nested_control_structures": (calculate_metrics.calculate_number_of_nested_control_structures, 0),
+        "maximum_nesting_level_of_control_structures": (
+            calculate_metrics.calculate_maximum_nesting_level_of_control_structures,
+            1,
+        ),
+        "maximum_of_control_dependent_control_structures": (
+            calculate_metrics.calculate_maximum_of_control_dependent_control_structures,
+            1,
+        ),
+        "maximum_of_data_dependent_control_structures": (
+            calculate_metrics.calculate_maximum_of_data_dependent_control_structures,
+            0,
+        ),
+        "number_of_variables_involved_in_control_predicates": (
+            calculate_metrics.calculate_number_of_variables_involved_in_control_predicates,
+            0,
+        ),
+    }
+
+    for label, (metric_fn, expected_value) in expectations.items():
+        test_result = calculate_metrics.run_test(sourceCode, metric_fn)
+        assert test_result, f"No result returned for metric {label}"
+        func_name, value = test_result[0]
+        assert (
+            value == expected_value
+        ), f"Expected {expected_value} for metric {label} but got {value} for function {func_name}"

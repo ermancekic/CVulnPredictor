@@ -5,7 +5,216 @@ Concrete implementations of metric calculations operating on Clang cursors.
 These functions are imported and used by modules.calculate_metrics.
 """
 
+import weakref
+
+from clang import cindex
 from clang.cindex import TokenKind, CursorKind, TypeKind
+from typing import Dict, List, Optional, Tuple
+
+
+_MacroDefinitions = Dict[str, bool]
+_MacroExtents = List[Tuple[str, int, int, int, int]]
+_MacroCacheEntry = Tuple[Optional[weakref.ReferenceType], Tuple[_MacroDefinitions, _MacroExtents]]
+_MACRO_CACHE: Dict[int, _MacroCacheEntry] = {}
+_MACRO_CACHE_ATTR = "_cvuln_macro_context"
+
+
+def _is_system_header_location(location):
+    if location is None:
+        return False
+    attr = getattr(location, "is_in_system_header", None)
+    if callable(attr):
+        return bool(attr())
+    return bool(attr)
+
+
+def _is_system_header_cursor(cursor):
+    if cursor is None:
+        return False
+    location = getattr(cursor, "location", None)
+    return _is_system_header_location(location)
+
+
+def _references_system_header(cursor):
+    try:
+        referenced = cursor.referenced
+    except (AttributeError, ValueError, cindex.LibclangError):
+        return False
+    if referenced is None:
+        return False
+    return _is_system_header_cursor(referenced)
+
+
+def _collect_macro_definitions(cursor, macro_map: _MacroDefinitions) -> None:
+    # Use an explicit stack to avoid hitting Python's recursion limit on large ASTs.
+    stack = [cursor]
+    while stack:
+        node = stack.pop()
+        try:
+            kind = node.kind
+        except (AttributeError, cindex.LibclangError):
+            continue
+
+        if kind == CursorKind.MACRO_DEFINITION:
+            name = node.spelling
+            if name:
+                macro_map[name] = _is_system_header_cursor(node)
+
+        try:
+            for child in node.get_children():
+                stack.append(child)
+        except (AttributeError, cindex.LibclangError):
+            continue
+
+
+def _collect_system_macro_extents(
+    cursor,
+    macro_definitions: _MacroDefinitions,
+    extents: _MacroExtents,
+) -> None:
+    # Mirror the iterative walk used for definitions to prevent deep recursion.
+    stack = [cursor]
+    while stack:
+        node = stack.pop()
+        try:
+            kind = node.kind
+        except (AttributeError, cindex.LibclangError):
+            continue
+
+        if kind == CursorKind.MACRO_INSTANTIATION:
+            name = node.spelling
+            if name and macro_definitions.get(name):
+                extent = node.extent
+                if extent.start.file and extent.end.file:
+                    extents.append(
+                        (
+                            extent.start.file.name,
+                            extent.start.line,
+                            extent.start.column,
+                            extent.end.line,
+                            extent.end.column,
+                        )
+                    )
+
+        try:
+            for child in node.get_children():
+                stack.append(child)
+        except (AttributeError, cindex.LibclangError):
+            continue
+
+
+def _is_within_macro_extent(cursor, macro_extents: _MacroExtents) -> bool:
+    loc = cursor.location
+    if not loc or not loc.file:
+        return False
+
+    file_name = loc.file.name
+    line = loc.line
+    col = loc.column
+
+    for extent_file, start_line, start_col, end_line, end_col in macro_extents:
+        if file_name != extent_file:
+            continue
+        if start_line == end_line:
+            if line == start_line and start_col <= col <= end_col:
+                return True
+        else:
+            if line == start_line and col >= start_col:
+                return True
+            if line == end_line and col <= end_col:
+                return True
+            if start_line < line < end_line:
+                return True
+    return False
+
+
+def _get_macro_context(cursor) -> Optional[Tuple[_MacroDefinitions, _MacroExtents]]:
+    tu = getattr(cursor, "translation_unit", None)
+    if tu is None:
+        return None
+
+    cached = getattr(tu, _MACRO_CACHE_ATTR, None)
+    if cached is not None:
+        return cached
+
+    key = id(tu)
+    entry = _MACRO_CACHE.get(key)
+    if entry is not None:
+        ref, info = entry
+        if ref is None:
+            return info
+        target = ref()
+        if target is tu:
+            return info
+        if target is None:
+            _MACRO_CACHE.pop(key, None)
+
+    try:
+        root = tu.cursor
+    except AttributeError:
+        return None
+
+    macro_definitions: _MacroDefinitions = {}
+    _collect_macro_definitions(root, macro_definitions)
+
+    macro_extents: _MacroExtents = []
+    if macro_definitions:
+        _collect_system_macro_extents(root, macro_definitions, macro_extents)
+
+    info = (macro_definitions, macro_extents)
+
+    try:
+        setattr(tu, _MACRO_CACHE_ATTR, info)
+    except AttributeError:
+        try:
+            ref = weakref.ref(tu, lambda _ref, cache_key=key: _MACRO_CACHE.pop(cache_key, None))
+        except TypeError:
+            _MACRO_CACHE[key] = (None, info)
+        else:
+            _MACRO_CACHE[key] = (ref, info)
+    else:
+        _MACRO_CACHE.pop(key, None)
+
+    return info
+
+
+def _should_ignore_node(cursor):
+    if _is_system_header_cursor(cursor):
+        return True
+
+    # Calls that originate in user code but target functions declared in system
+    # headers (e.g. printf) should still be analysed so that their arguments
+    # contribute to metrics.  Keep ignoring other node kinds that merely
+    # reference system headers to avoid walking into system-provided ASTs.
+    if cursor.kind != CursorKind.CALL_EXPR and _references_system_header(cursor):
+        return True
+
+    macro_context = _get_macro_context(cursor)
+    if macro_context is None:
+        return False
+
+    macro_definitions, macro_extents = macro_context
+
+    if cursor.kind == CursorKind.MACRO_INSTANTIATION:
+        name = cursor.spelling
+        if name and macro_definitions.get(name):
+            return True
+
+    if macro_extents and _is_within_macro_extent(cursor, macro_extents):
+        return True
+
+    return False
+
+
+def _iter_relevant_children(cursor):
+    for child in cursor.get_children():
+        if _should_ignore_node(child):
+            continue
+        yield child
+
+
+def _children(cursor):
+    return list(_iter_relevant_children(cursor))
 
 
 def calculate_cyclomatic_complexity(cursor):
@@ -43,7 +252,7 @@ def calculate_cyclomatic_complexity(cursor):
             complexity += 1
         elif CK_CATCH is not None and k == CK_CATCH:
             complexity += 1
-        for child in node.get_children():
+        for child in _iter_relevant_children(node):
             visit(child)
     visit(cursor)
     return complexity
@@ -72,7 +281,7 @@ def calculate_number_of_loops(cursor):
         nonlocal count
         if node.kind in loop_kinds:
             count += 1
-        for child in node.get_children():
+        for child in _iter_relevant_children(node):
             visit(child)
 
     visit(cursor)
@@ -99,7 +308,7 @@ def calculate_number_of_nested_loops(cursor):
     nested_count = 0
 
     def contains_loop_in_subtree(node):
-        for child in node.get_children():
+        for child in _iter_relevant_children(node):
             if child.kind in loop_kinds:
                 return True
             if contains_loop_in_subtree(child):
@@ -112,7 +321,7 @@ def calculate_number_of_nested_loops(cursor):
             if contains_loop_in_subtree(node):
                 nested_count += 1
             return
-        for child in node.get_children():
+        for child in _iter_relevant_children(node):
             visit(child)
 
     visit(cursor)
@@ -143,7 +352,7 @@ def calculate_max_nesting_loop_depth(cursor):
         if node.kind in loop_kinds:
             depth += 1
             max_depth = max(max_depth, depth)
-        for child in node.get_children():
+        for child in _iter_relevant_children(node):
             visit(child, depth)
 
     visit(cursor)
@@ -180,7 +389,7 @@ def calculate_number_of_callee_parameter_variables(cursor):
             ref = node.referenced
             if ref is not None and ref.kind in (CursorKind.VAR_DECL, CursorKind.PARM_DECL, CursorKind.FIELD_DECL):
                 callee_param_vars.add(node.spelling)
-        for child in node.get_children():
+        for child in _iter_relevant_children(node):
             extract_vars(child)
 
     def visit(node):
@@ -188,7 +397,7 @@ def calculate_number_of_callee_parameter_variables(cursor):
             args = list(node.get_arguments())
             for arg in args:
                 extract_vars(arg)
-        for child in node.get_children():
+        for child in _iter_relevant_children(node):
             visit(child)
 
     visit(cursor)
@@ -214,7 +423,7 @@ def calculate_number_of_pointer_arithmetic(cursor):
     def visit(node, parent=None):
         nonlocal count
         if node.kind == CursorKind.BINARY_OPERATOR:
-            children = list(node.get_children())
+            children = _children(node)
             if len(children) == 2:
                 lhs, rhs = children
                 lhs_kind = lhs.type.kind
@@ -233,7 +442,7 @@ def calculate_number_of_pointer_arithmetic(cursor):
                             count += 1
                             break
         elif node.kind == CursorKind.COMPOUND_ASSIGNMENT_OPERATOR:
-            children = list(node.get_children())
+            children = _children(node)
             if len(children) == 2:
                 lhs, rhs = children
                 lhs_kind = lhs.type.kind
@@ -244,7 +453,7 @@ def calculate_number_of_pointer_arithmetic(cursor):
                             count += 1
                             break
         elif node.kind == CursorKind.UNARY_OPERATOR:
-            children = list(node.get_children())
+            children = _children(node)
             if len(children) == 1:
                 child = children[0]
                 # ++p / --p on a pointer
@@ -266,7 +475,7 @@ def calculate_number_of_pointer_arithmetic(cursor):
                 if tok.kind == TokenKind.PUNCTUATION and tok.spelling == '->':
                     count += 1
                     break
-        for child in node.get_children():
+        for child in _iter_relevant_children(node):
             visit(child, node)
 
     visit(cursor)
@@ -292,7 +501,7 @@ def calculate_number_of_variables_involved_in_pointer_arithmetic(cursor):
             ref = subnode.referenced
             if ref is not None and ref.kind in (CursorKind.VAR_DECL, CursorKind.PARM_DECL):
                 vars_involved.add(subnode.spelling)
-        for child in subnode.get_children():
+        for child in _iter_relevant_children(subnode):
             collect_declref_vars(child)
 
     # Only treat the following operators as true pointer arithmetic
@@ -309,7 +518,7 @@ def calculate_number_of_variables_involved_in_pointer_arithmetic(cursor):
 
     def visit(node):
         if node.kind == CursorKind.BINARY_OPERATOR:
-            children = list(node.get_children())
+            children = _children(node)
             if len(children) == 2:
                 lhs, rhs = children
                 lhs_kind = lhs.type.kind
@@ -334,7 +543,7 @@ def calculate_number_of_variables_involved_in_pointer_arithmetic(cursor):
                     collect_declref_vars(rhs)
 
         elif node.kind == CursorKind.COMPOUND_ASSIGNMENT_OPERATOR:
-            children = list(node.get_children())
+            children = _children(node)
             if len(children) == 2 and _node_has_any_op(node, compound_ops):
                 lhs, rhs = children
                 lhs_kind = lhs.type.kind
@@ -343,7 +552,7 @@ def calculate_number_of_variables_involved_in_pointer_arithmetic(cursor):
                     collect_declref_vars(lhs)
 
         elif node.kind == CursorKind.UNARY_OPERATOR:
-            children = list(node.get_children())
+            children = _children(node)
             if len(children) == 1:
                 child = children[0]
                 # ++p / --p
@@ -360,12 +569,12 @@ def calculate_number_of_variables_involved_in_pointer_arithmetic(cursor):
             # p->m: collect the base pointer variable (left-hand side)
             has_arrow = any(tok.kind == TokenKind.PUNCTUATION and tok.spelling == '->' for tok in node.get_tokens())
             if has_arrow:
-                children = list(node.get_children())
+                children = _children(node)
                 if children:
                     # Heuristic: first child is the base expression; collect variables from it
                     collect_declref_vars(children[0])
 
-        for child in node.get_children():
+        for child in _iter_relevant_children(node):
             visit(child)
 
     visit(cursor)
@@ -391,7 +600,7 @@ def calculate_max_pointer_arithmetic_variable_is_involved_in(cursor):
             if ref is not None and ref.kind in (CursorKind.VAR_DECL, CursorKind.PARM_DECL):
                 name = subnode.spelling
                 var_counts[name] = var_counts.get(name, 0) + 1
-        for child in subnode.get_children():
+        for child in _iter_relevant_children(subnode):
             bump_vars(child)
 
     bin_ops_ptr_int = {'+', '-'}
@@ -407,7 +616,7 @@ def calculate_max_pointer_arithmetic_variable_is_involved_in(cursor):
 
     def visit(node):
         if node.kind == CursorKind.BINARY_OPERATOR:
-            children = list(node.get_children())
+            children = _children(node)
             if len(children) == 2:
                 lhs, rhs = children
                 lhs_kind = lhs.type.kind
@@ -426,7 +635,7 @@ def calculate_max_pointer_arithmetic_variable_is_involved_in(cursor):
                     bump_vars(lhs)
                     bump_vars(rhs)
         elif node.kind == CursorKind.COMPOUND_ASSIGNMENT_OPERATOR:
-            children = list(node.get_children())
+            children = _children(node)
             if len(children) == 2 and _node_has_any_op(node, compound_ops):
                 lhs, rhs = children
                 lhs_kind = lhs.type.kind
@@ -434,7 +643,7 @@ def calculate_max_pointer_arithmetic_variable_is_involved_in(cursor):
                 if lhs_kind == TypeKind.POINTER and rhs_kind != TypeKind.POINTER:
                     bump_vars(lhs)
         elif node.kind == CursorKind.UNARY_OPERATOR:
-            children = list(node.get_children())
+            children = _children(node)
             if len(children) == 1:
                 child = children[0]
                 # ++p / --p
@@ -450,10 +659,10 @@ def calculate_max_pointer_arithmetic_variable_is_involved_in(cursor):
             # p->m: bump base pointer variable
             has_arrow = any(tok.kind == TokenKind.PUNCTUATION and tok.spelling == '->' for tok in node.get_tokens())
             if has_arrow:
-                children = list(node.get_children())
+                children = _children(node)
                 if children:
                     bump_vars(children[0])
-        for child in node.get_children():
+        for child in _iter_relevant_children(node):
             visit(child)
 
     visit(cursor)
@@ -482,7 +691,7 @@ def calculate_number_of_nested_control_structures(cursor):
     nested_count = 0
 
     def contains_control_in_subtree(node):
-        for child in node.get_children():
+        for child in _iter_relevant_children(node):
             if child.kind in control_kinds:
                 return True
             if contains_control_in_subtree(child):
@@ -495,7 +704,7 @@ def calculate_number_of_nested_control_structures(cursor):
             if contains_control_in_subtree(node):
                 nested_count += 1
             return
-        for child in node.get_children():
+        for child in _iter_relevant_children(node):
             visit(child)
 
     visit(cursor)
@@ -534,7 +743,7 @@ def calculate_maximum_nesting_level_of_control_structures(cursor):
             if new_depth > max_depth:
                 max_depth = new_depth
 
-            children = list(node.get_children())
+            children = _children(node)
             cond = children[0] if len(children) >= 1 else None
             then = children[1] if len(children) >= 2 else None
             els  = children[2] if len(children) >= 3 else None
@@ -567,12 +776,12 @@ def calculate_maximum_nesting_level_of_control_structures(cursor):
             new_depth = depth + 1
             if new_depth > max_depth:
                 max_depth = new_depth
-            for child in node.get_children():
+            for child in _iter_relevant_children(node):
                 visit(child, new_depth)
             return
 
         # Non-control nodes: propagate same depth
-        for child in node.get_children():
+        for child in _iter_relevant_children(node):
             visit(child, depth)
 
     visit(cursor, 0)
@@ -600,7 +809,7 @@ def calculate_maximum_of_control_dependent_control_structures(cursor):
 
     def count_control_in_subtree(node):
         count = 1 if node.kind in control_kinds else 0
-        for child in node.get_children():
+        for child in _iter_relevant_children(node):
             count += count_control_in_subtree(child)
         return count
 
@@ -612,7 +821,7 @@ def calculate_maximum_of_control_dependent_control_structures(cursor):
             subtree_count = count_control_in_subtree(node)
             if subtree_count > max_count:
                 max_count = subtree_count
-        for child in node.get_children():
+        for child in _iter_relevant_children(node):
             visit(child)
 
     visit(cursor)
@@ -643,11 +852,11 @@ def calculate_maximum_of_data_dependent_control_structures(cursor):
             ref = subnode.referenced
             if ref is not None and ref.kind in (CursorKind.VAR_DECL, CursorKind.PARM_DECL, CursorKind.FIELD_DECL):
                 var_set.add(subnode.spelling)
-        for child in subnode.get_children():
+        for child in _iter_relevant_children(subnode):
             collect_vars(child, var_set)
 
     def find_conditional_node(control_node):
-        children = list(control_node.get_children())
+        children = _children(control_node)
         if control_node.kind == CursorKind.IF_STMT:
             return children[0] if children else None
         if control_node.kind == CursorKind.WHILE_STMT:
@@ -678,7 +887,7 @@ def calculate_maximum_of_data_dependent_control_structures(cursor):
             if cond_vars:
                 for v in cond_vars:
                     var_counts[v] = var_counts.get(v, 0) + 1
-        for child in node.get_children():
+        for child in _iter_relevant_children(node):
             visit(child)
 
     visit(cursor)
@@ -700,10 +909,10 @@ def calculate_number_of_if_structures_without_else(cursor):
     def visit(node):
         nonlocal count
         if node.kind == CursorKind.IF_STMT:
-            children = list(node.get_children())
+            children = _children(node)
             if len(children) < 3:
                 count += 1
-        for child in node.get_children():
+        for child in _iter_relevant_children(node):
             visit(child)
 
     visit(cursor)
@@ -736,12 +945,12 @@ def calculate_number_of_variables_involved_in_control_predicates(cursor):
             ref = subnode.referenced
             if ref is not None and ref.kind in (CursorKind.VAR_DECL, CursorKind.PARM_DECL, CursorKind.FIELD_DECL):
                 vars_in_conditions.add(subnode.spelling)
-        for child in subnode.get_children():
+        for child in _iter_relevant_children(subnode):
             collect_vars(child)
 
     def process_control(node):
         cond = None
-        children = list(node.get_children())
+        children = _children(node)
         if node.kind == CursorKind.IF_STMT:
             cond = children[0] if children else None
         elif node.kind == CursorKind.WHILE_STMT:
@@ -760,7 +969,7 @@ def calculate_number_of_variables_involved_in_control_predicates(cursor):
     def visit(node):
         if node.kind in control_kinds:
             process_control(node)
-        for child in node.get_children():
+        for child in _iter_relevant_children(node):
             visit(child)
 
     visit(cursor)
