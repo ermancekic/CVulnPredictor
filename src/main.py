@@ -212,28 +212,6 @@ def write_json(data, file_path: Path) -> None:
         n = "?"
     logging.info("%s entries written to %s", n, file_path)
 
-
-def clone_project(project_tuple: tuple[str, str, *tuple[str, ...]]):
-    """
-    Clone a project repository and optionally checkout specific commits.
-
-    Args:
-        project_tuple: (project_name, url, *commits)
-
-    Returns:
-        (project_name, list_of_commits | None)
-    """
-    project_name, url, *commits = project_tuple
-    logging.info("Cloning project %s from %s with %d commits...", project_name, url, len(commits))
-    try:
-        prep.get_oss_projects((project_name, url, *commits))
-        return project_name, commits
-    except Exception as e:
-        tb = traceback.format_exc()
-        logging.error("Error cloning %s: %s\n%s", project_name, e, tb)
-        return project_name, None
-
-
 def run_metrics_for_project(project_path: Path) -> tuple[str, bool]:
     """Run metric calculations for a given project directory.
 
@@ -306,12 +284,7 @@ def main() -> None:
                 logging.warning("Repo directory missing: %s – skipping %s", repo_dir, entry.name)
 
     # Calculate metrics in parallel
-    # Avoid CPU oversubscription (libclang parsing is CPU-bound)
-    env_workers = os.getenv("METRICS_WORKERS")
-    if env_workers and str(env_workers).isdigit():
-        max_workers = max(1, int(env_workers))
-    else:
-        max_workers = min(len(projects) or 1, max(1, mp.cpu_count()))
+    max_workers = mp.cpu_count() * 2
     successes = 0
     failures = 0
 
@@ -348,26 +321,26 @@ def main() -> None:
 
     while not finished:
         increments = {
-            "lines of code": 10,
-            "cyclomatic complexity": 1,
-            "number of loops": 1,
-            "number of nested loops": 1,
+            "lines of code": 2,
+            "cyclomatic complexity": 10,
+            "number of loops": 2,
+            "number of nested loops": 2,
             "max nesting loop depth": 1,
             "number of parameter variables": 1,
             "number of callee parameter variables": 1,
-            "number of pointer arithmetic": 1,
+            "number of pointer arithmetic": 200,
             "number of variables involved in pointer arithmetic": 1,
-            "max pointer arithmetic variable is involved in": 1,
-            "number of nested control structures": 1,
+            "max pointer arithmetic variable is involved in": 50,
+            "number of nested control structures": 2,
             "maximum nesting level of control structures": 1,
-            "maximum of control dependent control structures": 1,
-            "maximum of data dependent control structures": 1,
-            "number of if structures without else": 1,
+            "maximum of control dependent control structures": 2,
+            "maximum of data dependent control structures": 2,
+            "number of if structures without else": 2,
             "number of variables involved in control predicates": 2,
-            "NumChanges": 1,
-            "LinesChanged": 100,
-            "LinesNew": 100,
-            "NumDevs": 1,
+            "NumChanges": 50,
+            "LinesChanged": 5000,
+            "LinesNew": 5000,
+            "NumDevs": 5,
         }
         for key in THRESHOLDS:
             THRESHOLDS[key] += increments.get(key, 0)

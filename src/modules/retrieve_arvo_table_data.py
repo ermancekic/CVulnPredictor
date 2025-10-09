@@ -54,8 +54,6 @@ def export_per_project_crashes():
 	db_path = os.path.join(cwd, "arvo.db")
 	out_dir = os.path.join(cwd, "data", "arvo-projects")
 
-	os.makedirs(out_dir, exist_ok=True)
-
 	if not os.path.exists(db_path):
 		logging.info(f"arvo.db not found: {db_path}")
 		return
