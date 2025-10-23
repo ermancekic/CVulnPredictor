@@ -1,0 +1,163 @@
+{
+  "lines of code": {
+    "threshold": 4100,
+    "found_vulns": 2,
+    "total_vulns": 3955,
+    "total_methods": 4697,
+    "coverage": 5.9480128983109254e-5,
+    "lift": 8.50181413372228
+  },
+  "cyclomatic complexity": {
+    "threshold": 4100,
+    "found_vulns": 0,
+    "total_vulns": 3955,
+    "total_methods": 520,
+    "coverage": 6.584983408817716e-6,
+    "lift": 0.0
+  },
+  "number of loops": {
+    "threshold": 410,
+    "found_vulns": 5,
+    "total_vulns": 3955,
+    "total_methods": 2632,
+    "coverage": 3.3330146792323517e-5,
+    "lift": 37.9303010886147
+  },
+  "number of nested loops": {
+    "threshold": 82,
+    "found_vulns": 0,
+    "total_vulns": 3955,
+    "total_methods": 1724,
+    "coverage": 2.1831752686157195e-5,
+    "lift": 0.0
+  },
+  "max nesting loop depth": {
+    "threshold": 41,
+    "found_vulns": 0,
+    "total_vulns": 3955,
+    "total_methods": 6,
+    "coverage": 7.598057779405057e-8,
+    "lift": 0.0
+  },
+  "number of parameter variables": {
+    "threshold": 41,
+    "found_vulns": 0,
+    "total_vulns": 3955,
+    "total_methods": 4796,
+    "coverage": 6.0733808516711084e-5,
+    "lift": 4.16315898520575
+  },
+  "number of callee parameter variables": {
+    "threshold": 205,
+    "found_vulns": 1,
+    "total_vulns": 3955,
+    "total_methods": 2355,
+    "coverage": 2.9822376784164846e-5,
+    "lift": 8.478348404690776
+  },
+  "number of pointer arithmetic": {
+    "threshold": 8200,
+    "found_vulns": 0,
+    "total_vulns": 3955,
+    "total_methods": 142,
+    "coverage": 1.79820700779253e-6,
+    "lift": 0.0
+  },
+  "number of variables involved in pointer arithmetic": {
+    "threshold": 41,
+    "found_vulns": 3,
+    "total_vulns": 3955,
+    "total_methods": 1396,
+    "coverage": 1.76781477667491e-5,
+    "lift": 57.21063178523431
+  },
+  "max pointer arithmetic variable is involved in": {
+    "threshold": 3075,
+    "found_vulns": 2,
+    "total_vulns": 3955,
+    "total_methods": 677,
+    "coverage": 8.573141861095373e-6,
+    "lift": 58.98525994991662
+  },
+  "number of nested control structures": {
+    "threshold": 82,
+    "found_vulns": 1,
+    "total_vulns": 3955,
+    "total_methods": 9875,
+    "coverage": 0.0001250513676193749,
+    "lift": 2.0219251132199263
+  },
+  "maximum nesting level of control structures": {
+    "threshold": 41,
+    "found_vulns": 0,
+    "total_vulns": 3955,
+    "total_methods": 6,
+    "coverage": 7.598057779405057e-8,
+    "lift": 0.0
+  },
+  "maximum of control dependent control structures": {
+    "threshold": 410,
+    "found_vulns": 10,
+    "total_vulns": 3955,
+    "total_methods": 5097,
+    "coverage": 6.454550083604596e-5,
+    "lift": 39.17306355316221
+  },
+  "maximum of data dependent control structures": {
+    "threshold": 410,
+    "found_vulns": 6,
+    "total_vulns": 3955,
+    "total_methods": 2938,
+    "coverage": 3.720515625982009e-5,
+    "lift": 47.57167237962132
+  },
+  "number of if structures without else": {
+    "threshold": 410,
+    "found_vulns": 7,
+    "total_vulns": 3955,
+    "total_methods": 5990,
+    "coverage": 7.585394349772715e-5,
+    "lift": 23.333150826598903
+  },
+  "number of variables involved in control predicates": {
+    "threshold": 82,
+    "found_vulns": 6,
+    "total_vulns": 3955,
+    "total_methods": 9884,
+    "coverage": 0.00012516533848606597,
+    "lift": 20.200840239828793
+  },
+  "NumChanges": {
+    "threshold": 2050,
+    "found_vulns": 9,
+    "total_vulns": 3955,
+    "total_methods": 102603,
+    "coverage": 0.0012993058705671617,
+    "lift": 1.7513970784228625
+  },
+  "LinesChanged": {
+    "threshold": 410000,
+    "found_vulns": 3,
+    "total_vulns": 3955,
+    "total_methods": 1289330,
+    "coverage": 0.016327339727867204,
+    "lift": 0.04645787461638241
+  },
+  "LinesNew": {
+    "threshold": 410000,
+    "found_vulns": 2,
+    "total_vulns": 3955,
+    "total_methods": 71619,
+    "coverage": 0.0009069421668386846,
+    "lift": 0.5575757967312243
+  },
+  "NumDevs": {
+    "threshold": 205,
+    "found_vulns": 1,
+    "total_vulns": 3955,
+    "total_methods": 2419,
+    "coverage": 3.063283628063472e-5,
+    "lift": 8.254034928915575
+  },
+  "total_methods": 78967549
+}

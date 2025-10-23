@@ -1,0 +1,22 @@
+{
+  "lines of code": 192,
+  "cyclomatic complexity": 192,
+  "number of loops": 192,
+  "number of nested loops": 192,
+  "max nesting loop depth": 192,
+  "number of parameter variables": 192,
+  "number of callee parameter variables": 192,
+  "number of pointer arithmetic": 192,
+  "number of variables involved in pointer arithmetic": 192,
+  "max pointer arithmetic variable is involved in": 192,
+  "number of nested control structures": 192,
+  "maximum nesting level of control structures": 192,
+  "maximum of control dependent control structures": 192,
+  "maximum of data dependent control structures": 192,
+  "number of if structures without else": 192,
+  "number of variables involved in control predicates": 192,
+  "NumChanges": 192,
+  "LinesChanged": 192,
+  "LinesNew": 192,
+  "NumDevs": 192
+}
