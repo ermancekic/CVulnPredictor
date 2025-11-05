@@ -74,9 +74,11 @@ def _separate_worker(args):
                     # Be defensive about unexpected types
                     continue
 
-    # Now write exactly one file per metric folder
+    # Now write exactly one file per metric folder and threshold subfolder
     for metric_name, file_dict in filtered.items():
-        out_dir = os.path.join(single_metrics_dir, metric_name)
+        thr_val = thresholds.get(metric_name)
+        thr_key = str(thr_val) if thr_val is not None else "0"
+        out_dir = os.path.join(single_metrics_dir, metric_name, thr_key)
         try:
             os.makedirs(out_dir, exist_ok=True)
         except Exception:
@@ -110,14 +112,12 @@ def separate_and_filter_calculated_metrics(thresholds):
     general_dir = os.path.join(base, "data", "general")
     os.makedirs(general_dir, exist_ok=True)
 
-    # Complete cleanup of output directories
-    if os.path.exists(single_metrics_dir):
-        shutil.rmtree(single_metrics_dir)
+    # Ensure base output directory exists, but do not delete previous thresholds
     os.makedirs(single_metrics_dir, exist_ok=True)
-
-    # Pre-create all metric subdirectories (while thresholds are known)
-    for metric_name in thresholds:
-        os.makedirs(os.path.join(single_metrics_dir, metric_name), exist_ok=True)
+    # Pre-create metric/threshold subdirectories so readers can discover them if needed
+    for metric_name, thr_val in thresholds.items():
+        thr_key = str(thr_val) if thr_val is not None else "0"
+        os.makedirs(os.path.join(single_metrics_dir, metric_name, thr_key), exist_ok=True)
 
     # Prepare inputs
     entries = list(os.listdir(metrics_dir)) if os.path.isdir(metrics_dir) else []
@@ -391,7 +391,7 @@ def _cifiv_process_vuln_file(args):
     stable counters without double-counting.
 
     Args:
-        args: (vuln_path, metric_names, metrics_dir, output_dir, not_found_dir, skip_writes)
+        args: (vuln_path, metric_names, metrics_dir, output_dir, not_found_dir, skip_writes, thresholds_by_metric)
 
     Returns:
         dict[str, dict[str, list[str]]]:
@@ -400,7 +400,7 @@ def _cifiv_process_vuln_file(args):
               "seen_found": {metric: [sm_key, ...]}
             }
     """
-    (vuln_path, metric_names, metrics_dir, output_dir, not_found_dir, skip_writes) = args
+    (vuln_path, metric_names, metrics_dir, output_dir, not_found_dir, skip_writes, thresholds_by_metric) = args
 
     seen_total = {m: set() for m in metric_names}
     seen_found = {m: set() for m in metric_names}
@@ -411,11 +411,25 @@ def _cifiv_process_vuln_file(args):
     # Build per-metric filename sets once per worker for fast existence checks
     metric_files: dict[str, set[str]] = {}
     for m in metric_names:
-        mpth = os.path.join(metrics_dir, m)
+        # Prefer current threshold subfolder for the metric
+        thr_key = str(thresholds_by_metric.get(m)) if thresholds_by_metric else None
+        base_metric_dir = os.path.join(metrics_dir, m)
+        mdir = os.path.join(base_metric_dir, thr_key) if thr_key else base_metric_dir
+        files: set[str] = set()
         try:
-            metric_files[m] = set(e for e in os.listdir(mpth) if e.endswith(".json"))
+            if thr_key and os.path.isdir(mdir):
+                files = set(e for e in os.listdir(mdir) if e.endswith('.json'))
+            else:
+                # Fallback: collect JSON files from any threshold subdirectories
+                for d in os.listdir(base_metric_dir):
+                    sub = os.path.join(base_metric_dir, d)
+                    if os.path.isdir(sub):
+                        for e in os.listdir(sub):
+                            if e.endswith('.json'):
+                                files.add(e)
         except Exception:
-            metric_files[m] = set()
+            files = set()
+        metric_files[m] = files
 
     try:
         with open(vuln_path, "r", encoding="utf-8") as vf:
@@ -451,7 +465,13 @@ def _cifiv_process_vuln_file(args):
             if sm_key not in seen_total[metric_name]:
                 seen_total[metric_name].add(sm_key)
 
-            sm_file = os.path.join(metrics_dir, metric_name, target_file_name)
+            # Read from the selected threshold subfolder when available
+            thr_key = str(thresholds_by_metric.get(metric_name)) if thresholds_by_metric else None
+            if thr_key:
+                sm_file = os.path.join(metrics_dir, metric_name, thr_key, target_file_name)
+            else:
+                # Fallback to legacy one-level structure
+                sm_file = os.path.join(metrics_dir, metric_name, target_file_name)
             try:
                 with open(sm_file, "r", encoding="utf-8") as sf:
                     sm_data = json.load(sf)
@@ -591,6 +611,22 @@ def check_if_function_in_vulns(skip_set_total: bool = False):
     # Enumerate metrics and ensure target directories exist
     metric_names = [m for m in os.listdir(metrics_dir) if os.path.isdir(os.path.join(metrics_dir, m))] \
                    if os.path.isdir(metrics_dir) else []
+
+    # Load current thresholds per metric from result.json to select the threshold subfolders
+    thresholds_by_metric: dict[str, str] = {}
+    try:
+        with open(os.path.join(general_dir, "result.json"), "r", encoding="utf-8") as rf:
+            current_results = json.load(rf)
+        if isinstance(current_results, dict):
+            for m in metric_names:
+                entry = current_results.get(m)
+                if isinstance(entry, dict) and "threshold" in entry:
+                    try:
+                        thresholds_by_metric[m] = str(entry.get("threshold"))
+                    except Exception:
+                        continue
+    except Exception:
+        thresholds_by_metric = {}
     for metric_name in metric_names:
         # Ensure subdirectories exist; harmless if we skip writes
         os.makedirs(os.path.join(output_dir, metric_name), exist_ok=True)
@@ -614,7 +650,10 @@ def check_if_function_in_vulns(skip_set_total: bool = False):
         max_workers = max(1, min(len(vuln_files), _mp.cpu_count() or 1))
 
     # Prepare tasks
-    tasks = [(vp, metric_names, metrics_dir, output_dir, not_found_dir, skip_writes) for vp in vuln_files]
+    tasks = [
+        (vp, metric_names, metrics_dir, output_dir, not_found_dir, skip_writes, thresholds_by_metric)
+        for vp in vuln_files
+    ]
 
     # Global sets for stable aggregation
     global_seen_total = {m: set() for m in metric_names}
@@ -982,11 +1021,31 @@ def calculate_code_coverage() -> dict:
     if not os.path.isdir(single_metrics_dir):
         logging.info(f"Single-metrics directory not found: {single_metrics_dir}")
     else:
-        # Prepare (metric_name, metric_path) tasks
+        # Prepare (metric_name, threshold_path) tasks, selecting current threshold per metric
         metric_tasks: list[tuple[str, str]] = []
+
+        # Load current thresholds from result.json
+        thresholds_map: dict[str, str] = {}
+        try:
+            with open(os.path.join(general_dir, "result.json"), 'r', encoding='utf-8') as rf:
+                rd = json.load(rf)
+            if isinstance(rd, dict):
+                for k, v in rd.items():
+                    if isinstance(v, dict) and "threshold" in v:
+                        try:
+                            thresholds_map[k] = str(v.get("threshold"))
+                        except Exception:
+                            continue
+        except Exception:
+            thresholds_map = {}
+
         for metric_name in os.listdir(single_metrics_dir):
-            metric_path = os.path.join(single_metrics_dir, metric_name)
-            if os.path.isdir(metric_path):
+            metric_dir = os.path.join(single_metrics_dir, metric_name)
+            if not os.path.isdir(metric_dir):
+                continue
+            thr_key = thresholds_map.get(metric_name)
+            metric_path = os.path.join(metric_dir, thr_key) if thr_key else None
+            if metric_path and os.path.isdir(metric_path):
                 metric_tasks.append((metric_name, metric_path))
 
         if metric_tasks:
@@ -1413,3 +1472,239 @@ def plot_graphs():
 
     logging.info(f"Generated {plotted} metric plot(s) in {out_dir}")
     return plotted
+
+
+def calculate_overlap_of_metrics(threshold_override: dict | None = None):
+    """
+    Compute the pairwise overlap of vulnerabilities detected by each metric
+    (at its currently selected threshold) and generate a heatmap plot.
+
+    Vorgehen (Deutsch):
+    - Für jede Metrik in data/single-metrics wird ausschließlich der
+      Threshold-Unterordner verwendet, der in data/general/result.json unter
+      "threshold" konfiguriert ist.
+    - Wir iterieren über alle Vulnerabilities in data/arvo-projects und
+      ermitteln – analog zu check_if_function_in_vulns – pro Metrik die Menge
+      der tatsächlich gefundenen Vulnerabilities (sm_key = "{projekt}_{localID}").
+      Details zur Übereinstimmung:
+        * Es wird per Suffix der Dateipfad verglichen, Funktionsname per
+          Basisnamen (ohne Namespace/Templates) gematcht.
+        * Falls in der Vulnerability-Quelle Parameter existieren, wird die
+          gleiche Parameteranzahl (Arity) gefordert; Typgleichheit wird nicht
+          strikt geprüft (entspricht check_if_function_in_vulns).
+    - Aus den Found-Mengen bauen wir eine Overlap-Matrix: Zelle (i, j) = Anzahl
+      der gemeinsamen sm_keys zwischen Metrik i und Metrik j.
+    - Ergebnis wird als JSON unter data/general/overlap_matrix.json gespeichert
+      und als Heatmap unter data/general/plots/overlap_matrix.png visualisiert.
+
+    Approach (English):
+    - Read metrics under data/single-metrics and, for each metric, select only
+      the subfolder that corresponds to its configured threshold from
+      data/general/result.json (key: "threshold").
+    - Iterate over vulnerabilities in data/arvo-projects and, using the same
+      matching semantics as check_if_function_in_vulns, collect per metric the
+      set of actually found vulnerability IDs (sm_key = "{project}_{localID}").
+      Matching details:
+        * Normalize paths (suffix compare) and match base function names.
+        * If vuln signature exposes parameters, require equal arity; types are
+          not strictly compared (same as check_if_function_in_vulns).
+    - Build an overlap matrix where cell (i, j) is |found[i] ∩ found[j]|.
+    - Persist JSON to data/general/overlap_matrix.json and render a heatmap to
+      data/general/plots/overlap_matrix.png with metrics on both axes.
+
+    Args:
+        threshold_override (dict | None): Optional mapping metric -> threshold
+            to force a specific threshold folder per metric (e.g.,
+            {
+              "lines of code": 500,
+              "cyclomatic complexity": 1800,
+              "number of loops": 390,
+              "number of nested loops": 8,
+              "max nesting loop depth": 8,
+              "number of parameter variables": 21,
+              "number of callee parameter variables": 125,
+              "number of pointer arithmetic": 2800,
+              "number of variables involved in pointer arithmetic": 39,
+              "max pointer arithmetic variable is involved in": 1500,
+              "number of nested control structures": 6,
+              "maximum nesting level of control structures": 14,
+              "maximum of control dependent control structures": 210,
+              "maximum of data dependent control structures": 400,
+              "number of if structures without else": 270,
+              "number of variables involved in control predicates": 74,
+              "NumDevs": 200,
+            }). When not provided, values from data/general/result.json are used.
+
+    Returns:
+        dict: {"metrics": [metric names], "matrix": [[int overlaps]]}
+    """
+
+    base = os.getcwd()
+    single_metrics_dir = os.path.join(base, "data", "single-metrics")
+    vulns_dir = os.path.join(base, "data", "arvo-projects")
+    general_dir = os.path.join(base, "data", "general")
+    plots_dir = os.path.join(general_dir, "plots")
+    os.makedirs(general_dir, exist_ok=True)
+    os.makedirs(plots_dir, exist_ok=True)
+
+    # Collect metric names from data/single-metrics
+    if not os.path.isdir(single_metrics_dir):
+        logging.info(f"Single-metrics directory not found: {single_metrics_dir}")
+        return {"metrics": [], "matrix": []}
+
+    metric_names = [m for m in os.listdir(single_metrics_dir)
+                    if os.path.isdir(os.path.join(single_metrics_dir, m))]
+    if not metric_names:
+        logging.info("No metrics found under data/single-metrics")
+        return {"metrics": [], "matrix": []}
+
+    # Load current thresholds per metric from data/general/result.json
+    thresholds_by_metric: dict[str, str] = {}
+    result_path = os.path.join(general_dir, "result.json")
+    try:
+        with open(result_path, "r", encoding="utf-8") as rf:
+            rd = json.load(rf)
+        if isinstance(rd, dict):
+            for m in metric_names:
+                entry = rd.get(m)
+                if isinstance(entry, dict) and "threshold" in entry:
+                    try:
+                        thresholds_by_metric[m] = str(entry.get("threshold"))
+                    except Exception:
+                        continue
+    except Exception:
+        thresholds_by_metric = {}
+
+    # Apply explicit override when provided (use exactly these thresholds)
+    if isinstance(threshold_override, dict):
+        for k, v in threshold_override.items():
+            try:
+                thresholds_by_metric[k] = str(v)
+            except Exception:
+                continue
+
+    # If override provided, restrict to those metrics explicitly
+    if isinstance(threshold_override, dict) and threshold_override:
+        metric_names = [m for m in metric_names if m in threshold_override]
+
+    # Filter metrics to those that have an existing threshold directory
+    filtered_metrics: list[str] = []
+    for m in metric_names:
+        thr_key = thresholds_by_metric.get(m)
+        if not thr_key:
+            continue
+        thr_dir = os.path.join(single_metrics_dir, m, thr_key)
+        if os.path.isdir(thr_dir):
+            filtered_metrics.append(m)
+    metric_names = filtered_metrics
+
+    if not metric_names:
+        logging.info("No metric threshold directories found for overlap computation")
+        return {"metrics": [], "matrix": []}
+
+    # Collect vulnerability files
+    vuln_files = [os.path.join(vulns_dir, f) for f in os.listdir(vulns_dir)
+                  if f.endswith(".json")] if os.path.isdir(vulns_dir) else []
+    if not vuln_files:
+        logging.info(f"No vulnerability files found in {vulns_dir}")
+        return {"metrics": metric_names, "matrix": [[0 for _ in metric_names] for _ in metric_names]}
+
+    # Prepare tasks for parallel processing, reusing the same worker used by
+    # check_if_function_in_vulns but skipping any writes.
+    tasks = [
+        (vp, metric_names, single_metrics_dir, "", "", True, thresholds_by_metric)
+        for vp in vuln_files
+    ]
+
+    # Aggregate found sets per metric
+    global_seen_found = {m: set() for m in metric_names}
+
+    env_workers = os.getenv("CIFIV_WORKERS")
+    if env_workers and str(env_workers).isdigit():
+        max_workers = max(1, int(env_workers))
+    else:
+        max_workers = max(1, min(len(vuln_files), mp.cpu_count() or 1))
+
+    with ProcessPoolExecutor(max_workers=max_workers) as pool:
+        futs = [pool.submit(_cifiv_process_vuln_file, t) for t in tasks]
+        for fut in as_completed(futs):
+            try:
+                res = fut.result()
+            except Exception as e:
+                logging.info(f"Worker failed (overlap): {e}")
+                continue
+            if not isinstance(res, dict):
+                continue
+            sf = res.get("seen_found", {})
+            if not isinstance(sf, dict):
+                continue
+            for m in metric_names:
+                try:
+                    global_seen_found[m].update(sf.get(m, []))
+                except Exception:
+                    continue
+
+    # Build a deterministic order for matrix and compute pairwise intersections
+    metric_names_sorted = sorted(metric_names)
+    sets_by_metric = {m: set(global_seen_found.get(m, set())) for m in metric_names_sorted}
+    size = len(metric_names_sorted)
+    matrix: list[list[int]] = [[0] * size for _ in range(size)]
+    for i, mi in enumerate(metric_names_sorted):
+        for j, mj in enumerate(metric_names_sorted):
+            if i <= j:
+                inter = sets_by_metric[mi].intersection(sets_by_metric[mj])
+                matrix[i][j] = matrix[j][i] = int(len(inter))
+
+    # Write JSON summary
+    overlap_json_path = os.path.join(general_dir, "overlap_matrix.json")
+    try:
+        with open(overlap_json_path, "w", encoding="utf-8") as f:
+            json.dump({"metrics": metric_names_sorted, "matrix": matrix}, f, indent=2, ensure_ascii=False)
+        logging.info(f"Overlap matrix written to {overlap_json_path}")
+    except Exception as e:
+        logging.info(f"Error writing overlap matrix {overlap_json_path}: {e}")
+
+    # Create heatmap plot
+    try:
+        import matplotlib
+        try:
+            matplotlib.use("Agg")
+        except Exception:
+            pass
+        import matplotlib.pyplot as plt
+    except Exception as e:
+        logging.info(f"matplotlib not available for overlap plot: {e}")
+        return {"metrics": metric_names_sorted, "matrix": matrix}
+
+    fig, ax = plt.subplots(figsize=(max(6, len(metric_names_sorted) * 0.6),
+                                    max(5, len(metric_names_sorted) * 0.6)))
+    im = ax.imshow(matrix, cmap="viridis")
+    ax.set_xticks(range(size))
+    ax.set_xticklabels(metric_names_sorted, rotation=45, ha="right")
+    ax.set_yticks(range(size))
+    ax.set_yticklabels(metric_names_sorted)
+    ax.set_xlabel("Metric")
+    ax.set_ylabel("Metric")
+    ax.set_title("Vulnerability Overlap Between Metrics")
+
+    # Annotate cells with counts for readability
+    try:
+        for i in range(size):
+            for j in range(size):
+                ax.text(j, i, str(matrix[i][j]), ha="center", va="center", color="white" if matrix[i][j] > 0 else "black")
+    except Exception:
+        pass
+
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Overlap count")
+    fig.tight_layout()
+
+    out_plot = os.path.join(plots_dir, "overlap_matrix.png")
+    try:
+        fig.savefig(out_plot)
+        logging.info(f"Overlap heatmap saved to {out_plot}")
+    except Exception as e:
+        logging.info(f"Failed to save overlap plot at {out_plot}: {e}")
+    finally:
+        plt.close(fig)
+
+    return {"metrics": metric_names_sorted, "matrix": matrix}
