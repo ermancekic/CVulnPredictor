@@ -1120,14 +1120,29 @@ def calculate_code_coverage() -> dict:
 
 def calculate_lift():
     """
-    Compute Recall and Lift per metric and update data/general/result.json.
+    Compute confusion counts and derived metrics per metric, update data/general/result.json.
 
-    Formulas (per metric):
-      Recall = found_vulns / total_vulns
-      Effort = coverage
-      Lift   = Recall / Effort = (found_vulns / total_vulns) / coverage
+    For each metric at its current threshold, compute the following values:
+      - TP: Vulnerable methods that are also found ("found_vulns").
+      - FP: Found methods that are not vulnerable (selected methods - TP).
+      - TN: Not-found methods that are not vulnerable.
+      - FN: Vulnerable methods that are not found (total_vulns - TP).
 
-    Only sets values when the required inputs are present and denominators are > 0.
+    Derived metrics (per metric):
+      - recall    = TP / (TP + FN)
+      - coverage  = as currently computed and stored (selected / global_total_methods)
+      - precision = TP / (TP + FP)
+      - lift      = recall / coverage (as currently defined)
+      - f1        = 2 * precision * recall / (precision + recall)
+      - f2, f3    = F_beta with beta in {2, 3}:
+                    (1 + beta^2) * P * R / (beta^2 * P + R)
+
+    Notes:
+      - "selected" refers to the number of methods in the metric's threshold folder
+        (stored as entry["total_methods"]).
+      - "global_total_methods" is loaded from data/general/methods_total.json when available
+        (fallback to result.json top-level key "total_methods").
+      - Values are only set when the required inputs are present and denominators are > 0.
     """
     base = os.getcwd()
     general_dir = os.path.join(base, "data", "general")
@@ -1145,12 +1160,37 @@ def calculate_lift():
         logging.info(f"Unexpected format in {result_path}: expected object at top-level")
         return None
 
+    # Load global total methods to enable TN calculation; prefer methods_total.json
+    global_total_methods = None
+    methods_total_path = os.path.join(general_dir, "methods_total.json")
+    try:
+        with open(methods_total_path, 'r', encoding='utf-8') as mtf:
+            mt = json.load(mtf)
+        if isinstance(mt, dict):
+            try:
+                global_total_methods = int(mt.get("total_methods"))
+            except Exception:
+                global_total_methods = None
+    except Exception:
+        global_total_methods = None
+
+    # Fallback: sometimes also stored on the top-level of result.json
+    if not isinstance(global_total_methods, int):
+        try:
+            gtm = result_data.get("total_methods")
+            if gtm is not None:
+                global_total_methods = int(gtm)
+        except Exception:
+            global_total_methods = None
+
     for metric, entry in list(result_data.items()):
         if not isinstance(entry, dict):
+            # skip non-metric entries
             continue
 
         found = entry.get("found_vulns")
         total = entry.get("total_vulns")
+        selected = entry.get("total_methods")  # methods selected by this metric at its threshold
         coverage = entry.get("coverage")
 
         # Parse numeric values safely
@@ -1158,22 +1198,58 @@ def calculate_lift():
             found_i = int(found)
             total_i = int(total)
         except Exception:
+            # essential for TP/FN/recall
             continue
+
+        # Selected may be missing if coverage wasn't computed; treat as None
+        try:
+            selected_i = int(selected)
+        except Exception:
+            selected_i = None
 
         try:
             coverage_f = float(coverage)
         except Exception:
             coverage_f = None
 
-        # Compute recall if possible
+        # Confusion counts (ensure non-negative where derivable)
+        TP = max(0, found_i)
+        FN = max(0, total_i - TP)
+
+        FP = None
+        TN = None
+        if isinstance(selected_i, int):
+            try:
+                FP = max(0, selected_i - TP)
+            except Exception:
+                FP = None
+
+            # TN only computable with global total methods
+            if isinstance(global_total_methods, int):
+                try:
+                    TN = max(0, (global_total_methods - selected_i) - FN)
+                except Exception:
+                    TN = None
+
+        # Recall
         recall = None
         if total_i > 0:
             try:
-                recall = float(found_i) / float(total_i)
+                recall = float(TP) / float(TP + FN)
             except Exception:
                 recall = None
 
-        # Compute lift if possible (requires recall and coverage > 0)
+        # Precision
+        precision = None
+        if isinstance(FP, int):
+            denom = TP + FP
+            if denom > 0:
+                try:
+                    precision = float(TP) / float(denom)
+                except Exception:
+                    precision = None
+
+        # Lift (requires recall and coverage)
         lift = None
         if recall is not None and isinstance(coverage_f, float) and coverage_f > 0.0:
             try:
@@ -1181,17 +1257,56 @@ def calculate_lift():
             except Exception:
                 lift = None
 
+        # F1
+        f1 = None
+        if precision is not None and recall is not None and (precision + recall) > 0.0:
+            try:
+                f1 = 2.0 * precision * recall / (precision + recall)
+            except Exception:
+                f1 = None
+
+        # Generalized F_beta for beta in {2, 3}
+        def _f_beta(beta: float, p: float | None, r: float | None) -> float | None:
+            try:
+                if p is None or r is None:
+                    return None
+                beta2 = beta * beta
+                denom = beta2 * p + r
+                if denom <= 0:
+                    return None
+                return (1.0 + beta2) * p * r / denom
+            except Exception:
+                return None
+
+        f2 = _f_beta(2.0, precision, recall)
+        f3 = _f_beta(3.0, precision, recall)
+
         # Update entry
-        # if recall is not None:
-            # entry["recall"] = float(recall)
+        entry["TP"] = int(TP)
+        entry["FN"] = int(FN)
+        if isinstance(FP, int):
+            entry["FP"] = int(FP)
+        if isinstance(TN, int):
+            entry["TN"] = int(TN)
+        if recall is not None:
+            entry["recall"] = float(recall)
+        if precision is not None:
+            entry["precision"] = float(precision)
+        if f1 is not None:
+            entry["f1"] = float(f1)
+        if f2 is not None:
+            entry["f2"] = float(f2)
+        if f3 is not None:
+            entry["f3"] = float(f3)
         if lift is not None:
             entry["lift"] = float(lift)
+
         result_data[metric] = entry
 
     try:
         with open(result_path, 'w', encoding='utf-8') as f:
             json.dump(result_data, f, indent=2, ensure_ascii=False)
-        logging.info(f"Recall and Lift updated in {result_path}")
+        logging.info(f"Confusion counts and metrics updated in {result_path}")
     except Exception as e:
         logging.info(f"Error writing result file {result_path}: {e}")
 
@@ -1206,7 +1321,22 @@ def save_result_state():
 
         {
           "<metric>": {
-            "<threshold>": [total_vulns, found_vulns, total_methods, coverage, lift]
+            "<threshold>": [
+              total_vulns,       # index 0
+              found_vulns,       # index 1 (TP)
+              total_methods,     # index 2 (selected/predicted positives)
+              coverage,          # index 3
+              lift,              # index 4
+              precision,         # index 5
+              recall,            # index 6
+              f1,                # index 7
+              TP,                # index 8  (redundant with found_vulns)
+              FP,                # index 9
+              TN,                # index 10
+              FN,                # index 11
+              f2,                # index 12 (optional; may be None)
+              f3                 # index 13 (optional; may be None)
+            ]
           },
           ...
         }
@@ -1263,6 +1393,15 @@ def save_result_state():
         total_methods = entry.get("total_methods")
         coverage = entry.get("coverage")
         lift = entry.get("lift")
+        precision = entry.get("precision")
+        recall = entry.get("recall")
+        f1 = entry.get("f1")
+        f2 = entry.get("f2")
+        f3 = entry.get("f3")
+        TP = entry.get("TP")
+        FP = entry.get("FP")
+        TN = entry.get("TN")
+        FN = entry.get("FN")
 
         # Require at least a threshold to key by, and basic counts present
         if thr is None:
@@ -1276,6 +1415,15 @@ def save_result_state():
             tm_i = int(total_methods) if total_methods is not None else None
             cov_f = float(coverage) if coverage is not None else None
             lift_f = float(lift) if lift is not None else None
+            prec_f = float(precision) if precision is not None else None
+            rec_f = float(recall) if recall is not None else None
+            f1_f = float(f1) if f1 is not None else None
+            f2_f = float(f2) if f2 is not None else None
+            f3_f = float(f3) if f3 is not None else None
+            TP_i = int(TP) if TP is not None else None
+            FP_i = int(FP) if FP is not None else None
+            TN_i = int(TN) if TN is not None else None
+            FN_i = int(FN) if FN is not None else None
         except Exception:
             # If parsing fails, skip this metric to avoid corrupting the state file
             continue
@@ -1293,7 +1441,22 @@ def save_result_state():
         if not isinstance(metric_map, dict):
             metric_map = {}
 
-        metric_map[thr_key] = [tv_i, fv_i, tm_i, cov_f, lift_f]
+        metric_map[thr_key] = [
+            tv_i,
+            fv_i,
+            tm_i,
+            cov_f,
+            lift_f,
+            prec_f,
+            rec_f,
+            f1_f,
+            TP_i,
+            FP_i,
+            TN_i,
+            FN_i,
+            f2_f,
+            f3_f,
+        ]
         states[metric] = metric_map
         updated_metrics += 1
 
@@ -1369,14 +1532,17 @@ def delete_not_found_vulns_from_metrics_dir():
 
 
 def plot_graphs():
-    """Erzeugt für jede Metrik ein Lift-über-Threshold-Diagramm aus data/general/result_states.json.
+    """Erzeugt für jede Metrik Diagramme über Threshold aus data/general/result_states.json.
 
-    - X-Achse: Thresholds (Schwellenwerte)
-    - Y-Achse: 5. Wert (Lift)
-    - Nur positive X- und Y-Achse sichtbar
+    - Lift        unter data/general/plots/<metric>.png
+    - F1-Score    unter data/general/plots/<metric>_f1.png
+    - F2-Score    unter data/general/plots/<metric>_f2.png
+    - F3-Score    unter data/general/plots/<metric>_f3.png
+    - Recall      unter data/general/plots/<metric>_recall.png
+    - Precision   unter data/general/plots/<metric>_precision.png
 
     Rückgabe:
-        int: Anzahl der generierten Diagramme
+        int: Anzahl der generierten Diagramme (Lift + F1 + F2 + F3 + Recall + Precision)
     """
     base = os.getcwd()
     general_dir = os.path.join(base, "data", "general")
@@ -1416,59 +1582,280 @@ def plot_graphs():
         if not isinstance(thr_map, dict) or not thr_map:
             continue
 
-        # Punkte (Threshold, Lift) aufbauen; Index 4 == Lift
-        points = []
+        # Punkte (Threshold, Metrik) aufbauen
+        # Indexe:
+        #   4 == Lift
+        #   5 == Precision
+        #   6 == Recall
+        #   7 == F1
+        #  12 == F2 (optional)
+        #  13 == F3 (optional)
+        points_lift = []
+        points_f1 = []
+        points_f2 = []
+        points_f3 = []
+        points_precision = []
+        points_recall = []
         for thr_key, values in thr_map.items():
             if not isinstance(values, list) or len(values) < 5:
                 continue
-            lift_val = values[4]
-            if lift_val is None:
-                continue
             try:
                 x_thr = float(thr_key)
-                y_lift = float(lift_val)
             except Exception:
                 continue
-            if x_thr < 0 or y_lift < 0:
-                # Nur positive Quadrant-Werte berücksichtigen
-                continue
-            points.append((x_thr, y_lift))
 
-        if not points:
-            continue
+            # Lift sammeln
+            lift_val = values[4]
+            if lift_val is not None:
+                try:
+                    y_lift = float(lift_val)
+                    if x_thr >= 0 and y_lift >= 0:
+                        points_lift.append((x_thr, y_lift))
+                except Exception:
+                    pass
 
-        # Nach Threshold sortieren
-        points.sort(key=lambda p: p[0])
-        xs, ys = zip(*points)
+            # F1 sammeln, falls vorhanden
+            if len(values) >= 8:
+                f1_val = values[7]
+                if f1_val is not None:
+                    try:
+                        y_f1 = float(f1_val)
+                        if x_thr >= 0 and y_f1 >= 0:
+                            points_f1.append((x_thr, y_f1))
+                    except Exception:
+                        pass
 
-        fig, ax = plt.subplots()
-        ax.plot(xs, ys, marker="o")
+            # F2 sammeln (Index 12)
+            if len(values) >= 13:
+                f2_val = values[12]
+                if f2_val is not None:
+                    try:
+                        y_f2 = float(f2_val)
+                        if x_thr >= 0 and y_f2 >= 0:
+                            points_f2.append((x_thr, y_f2))
+                    except Exception:
+                        pass
 
-        # Nur positive Achsen anzeigen
-        ax.set_xlim(left=0)
-        ax.set_ylim(bottom=0)
-        try:
-            ax.spines["top"].set_visible(False)
-            ax.spines["right"].set_visible(False)
-        except Exception:
-            pass
+            # F3 sammeln (Index 13)
+            if len(values) >= 14:
+                f3_val = values[13]
+                if f3_val is not None:
+                    try:
+                        y_f3 = float(f3_val)
+                        if x_thr >= 0 and y_f3 >= 0:
+                            points_f3.append((x_thr, y_f3))
+                    except Exception:
+                        pass
 
-        ax.set_title(metric)
-        ax.set_xlabel("Threshold")
-        ax.set_ylabel("Lift")
-        ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.5)
-        fig.tight_layout()
+            # Precision sammeln (Index 5)
+            if len(values) >= 6:
+                prec_val = values[5]
+                if prec_val is not None:
+                    try:
+                        y_prec = float(prec_val)
+                        if x_thr >= 0 and y_prec >= 0:
+                            points_precision.append((x_thr, y_prec))
+                    except Exception:
+                        pass
 
-        # Dateiname absichern
+            # Recall sammeln (Index 6)
+            if len(values) >= 7:
+                rec_val = values[6]
+                if rec_val is not None:
+                    try:
+                        y_rec = float(rec_val)
+                        if x_thr >= 0 and y_rec >= 0:
+                            points_recall.append((x_thr, y_rec))
+                    except Exception:
+                        pass
+
         metric_slug = _re.sub(r"[^0-9a-zA-Z]+", "_", (metric or "").strip().lower()).strip("_") or "metric"
-        out_path = os.path.join(out_dir, f"{metric_slug}.png")
-        try:
-            fig.savefig(out_path)
-            plotted += 1
-        except Exception as e:
-            logging.info(f"Failed to save plot for {metric} at {out_path}: {e}")
-        finally:
-            plt.close(fig)
+
+        # LIFT-PLOT
+        if points_lift:
+            points_lift.sort(key=lambda p: p[0])
+            xs, ys = zip(*points_lift)
+
+            fig, ax = plt.subplots()
+            ax.plot(xs, ys, marker="o")
+
+            ax.set_xlim(left=0)
+            ax.set_ylim(bottom=0)
+            try:
+                ax.spines["top"].set_visible(False)
+                ax.spines["right"].set_visible(False)
+            except Exception:
+                pass
+
+            ax.set_title(metric)
+            ax.set_xlabel("Threshold")
+            ax.set_ylabel("Lift")
+            ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.5)
+            fig.tight_layout()
+
+            out_path = os.path.join(out_dir, f"{metric_slug}.png")
+            try:
+                fig.savefig(out_path)
+                plotted += 1
+            except Exception as e:
+                logging.info(f"Failed to save plot for {metric} at {out_path}: {e}")
+            finally:
+                plt.close(fig)
+
+        # F1-PLOT
+        if points_f1:
+            points_f1.sort(key=lambda p: p[0])
+            xs, ys = zip(*points_f1)
+
+            fig, ax = plt.subplots()
+            ax.plot(xs, ys, marker="o")
+
+            ax.set_xlim(left=0)
+            ax.set_ylim(bottom=0)
+            try:
+                ax.spines["top"].set_visible(False)
+                ax.spines["right"].set_visible(False)
+            except Exception:
+                pass
+
+            ax.set_title(f"{metric} (F1)")
+            ax.set_xlabel("Threshold")
+            ax.set_ylabel("F1-Score")
+            ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.5)
+            fig.tight_layout()
+
+            out_path = os.path.join(out_dir, f"{metric_slug}_f1.png")
+            try:
+                fig.savefig(out_path)
+                plotted += 1
+            except Exception as e:
+                logging.info(f"Failed to save F1 plot for {metric} at {out_path}: {e}")
+            finally:
+                plt.close(fig)
+
+        # F2-PLOT
+        if points_f2:
+            points_f2.sort(key=lambda p: p[0])
+            xs, ys = zip(*points_f2)
+
+            fig, ax = plt.subplots()
+            ax.plot(xs, ys, marker="o")
+
+            ax.set_xlim(left=0)
+            ax.set_ylim(bottom=0)
+            try:
+                ax.spines["top"].set_visible(False)
+                ax.spines["right"].set_visible(False)
+            except Exception:
+                pass
+
+            ax.set_title(f"{metric} (F2)")
+            ax.set_xlabel("Threshold")
+            ax.set_ylabel("F2-Score")
+            ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.5)
+            fig.tight_layout()
+
+            out_path = os.path.join(out_dir, f"{metric_slug}_f2.png")
+            try:
+                fig.savefig(out_path)
+                plotted += 1
+            except Exception as e:
+                logging.info(f"Failed to save F2 plot for {metric} at {out_path}: {e}")
+            finally:
+                plt.close(fig)
+
+        # F3-PLOT
+        if points_f3:
+            points_f3.sort(key=lambda p: p[0])
+            xs, ys = zip(*points_f3)
+
+            fig, ax = plt.subplots()
+            ax.plot(xs, ys, marker="o")
+
+            ax.set_xlim(left=0)
+            ax.set_ylim(bottom=0)
+            try:
+                ax.spines["top"].set_visible(False)
+                ax.spines["right"].set_visible(False)
+            except Exception:
+                pass
+
+            ax.set_title(f"{metric} (F3)")
+            ax.set_xlabel("Threshold")
+            ax.set_ylabel("F3-Score")
+            ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.5)
+            fig.tight_layout()
+
+            out_path = os.path.join(out_dir, f"{metric_slug}_f3.png")
+            try:
+                fig.savefig(out_path)
+                plotted += 1
+            except Exception as e:
+                logging.info(f"Failed to save F3 plot for {metric} at {out_path}: {e}")
+            finally:
+                plt.close(fig)
+
+        # PRECISION-PLOT
+        if points_precision:
+            points_precision.sort(key=lambda p: p[0])
+            xs, ys = zip(*points_precision)
+
+            fig, ax = plt.subplots()
+            ax.plot(xs, ys, marker="o")
+
+            ax.set_xlim(left=0)
+            ax.set_ylim(bottom=0)
+            try:
+                ax.spines["top"].set_visible(False)
+                ax.spines["right"].set_visible(False)
+            except Exception:
+                pass
+
+            ax.set_title(f"{metric} (Precision)")
+            ax.set_xlabel("Threshold")
+            ax.set_ylabel("Precision")
+            ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.5)
+            fig.tight_layout()
+
+            out_path = os.path.join(out_dir, f"{metric_slug}_precision.png")
+            try:
+                fig.savefig(out_path)
+                plotted += 1
+            except Exception as e:
+                logging.info(f"Failed to save Precision plot for {metric} at {out_path}: {e}")
+            finally:
+                plt.close(fig)
+
+        # RECALL-PLOT
+        if points_recall:
+            points_recall.sort(key=lambda p: p[0])
+            xs, ys = zip(*points_recall)
+
+            fig, ax = plt.subplots()
+            ax.plot(xs, ys, marker="o")
+
+            ax.set_xlim(left=0)
+            ax.set_ylim(bottom=0)
+            try:
+                ax.spines["top"].set_visible(False)
+                ax.spines["right"].set_visible(False)
+            except Exception:
+                pass
+
+            ax.set_title(f"{metric} (Recall)")
+            ax.set_xlabel("Threshold")
+            ax.set_ylabel("Recall")
+            ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.5)
+            fig.tight_layout()
+
+            out_path = os.path.join(out_dir, f"{metric_slug}_recall.png")
+            try:
+                fig.savefig(out_path)
+                plotted += 1
+            except Exception as e:
+                logging.info(f"Failed to save Recall plot for {metric} at {out_path}: {e}")
+            finally:
+                plt.close(fig)
 
     logging.info(f"Generated {plotted} metric plot(s) in {out_dir}")
     return plotted
