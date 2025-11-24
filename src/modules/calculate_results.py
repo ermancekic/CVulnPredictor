@@ -1538,11 +1538,16 @@ def plot_graphs():
     - F1-Score    unter data/general/plots/<metric>_f1.png
     - F2-Score    unter data/general/plots/<metric>_f2.png
     - F3-Score    unter data/general/plots/<metric>_f3.png
+    - F1/F2/F3    unter data/general/plots/<metric>_f_scores.png
     - Recall      unter data/general/plots/<metric>_recall.png
     - Precision   unter data/general/plots/<metric>_precision.png
+    - Precision/Recall (kombiniert, erster Recall-Wert ausgelassen)
+                   unter data/general/plots/<metric>_prec_rec.png
 
     Rückgabe:
-        int: Anzahl der generierten Diagramme (Lift + F1 + F2 + F3 + Recall + Precision)
+        int: Anzahl der generierten Diagramme
+             (Lift + F1 + F2 + F3 + F1/F2/F3 kombiniert
+              + Recall + Precision + Precision/Recall kombiniert)
     """
     base = os.getcwd()
     general_dir = os.path.join(base, "data", "general")
@@ -1795,6 +1800,52 @@ def plot_graphs():
             finally:
                 plt.close(fig)
 
+        # Combined F1/F2/F3 plot (falls mindestens eine Kurve vorhanden ist)
+        if points_f1 or points_f2 or points_f3:
+            fig, ax = plt.subplots()
+
+            # F1
+            if points_f1:
+                pts = sorted(points_f1, key=lambda p: p[0])
+                xs, ys = zip(*pts)
+                ax.plot(xs, ys, marker="o", label="F1")
+
+            # F2
+            if points_f2:
+                pts = sorted(points_f2, key=lambda p: p[0])
+                xs, ys = zip(*pts)
+                ax.plot(xs, ys, marker="o", label="F2")
+
+            # F3
+            if points_f3:
+                pts = sorted(points_f3, key=lambda p: p[0])
+                xs, ys = zip(*pts)
+                ax.plot(xs, ys, marker="o", label="F3")
+
+            ax.set_xlim(left=0)
+            ax.set_ylim(bottom=0)
+            try:
+                ax.spines["top"].set_visible(False)
+                ax.spines["right"].set_visible(False)
+            except Exception:
+                pass
+
+            ax.set_title(f"{metric} (F1/F2/F3)")
+            ax.set_xlabel("Threshold")
+            ax.set_ylabel("F-Score")
+            ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.5)
+            ax.legend()
+            fig.tight_layout()
+
+            out_path = os.path.join(out_dir, f"{metric_slug}_f_scores.png")
+            try:
+                fig.savefig(out_path)
+                plotted += 1
+            except Exception as e:
+                logging.info(f"Failed to save combined F-score plot for {metric} at {out_path}: {e}")
+            finally:
+                plt.close(fig)
+
         # PRECISION-PLOT
         if points_precision:
             points_precision.sort(key=lambda p: p[0])
@@ -1826,13 +1877,64 @@ def plot_graphs():
             finally:
                 plt.close(fig)
 
-        # RECALL-PLOT
+        # RECALL-PLOT (ersten Wert auslassen, falls vorhanden)
         if points_recall:
-            points_recall.sort(key=lambda p: p[0])
-            xs, ys = zip(*points_recall)
+            pts_rec_plot = sorted(points_recall, key=lambda p: p[0])
+            if len(pts_rec_plot) > 1:
+                pts_rec_plot = pts_rec_plot[1:]
+            else:
+                pts_rec_plot = []
 
+            if pts_rec_plot:
+                xs, ys = zip(*pts_rec_plot)
+
+                fig, ax = plt.subplots()
+                ax.plot(xs, ys, marker="o")
+
+                ax.set_xlim(left=0)
+                ax.set_ylim(bottom=0)
+                try:
+                    ax.spines["top"].set_visible(False)
+                    ax.spines["right"].set_visible(False)
+                except Exception:
+                    pass
+
+                ax.set_title(f"{metric} (Recall)")
+                ax.set_xlabel("Threshold")
+                ax.set_ylabel("Recall")
+                ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.5)
+                fig.tight_layout()
+
+                out_path = os.path.join(out_dir, f"{metric_slug}_recall.png")
+                try:
+                    fig.savefig(out_path)
+                    plotted += 1
+                except Exception as e:
+                    logging.info(f"Failed to save Recall plot for {metric} at {out_path}: {e}")
+                finally:
+                    plt.close(fig)
+
+        # Combined Precision/Recall plot (erster Recall-Wert wird ausgelassen)
+        if points_precision or points_recall:
             fig, ax = plt.subplots()
-            ax.plot(xs, ys, marker="o")
+
+            # Precision
+            if points_precision:
+                pts_prec = sorted(points_precision, key=lambda p: p[0])
+                xs_p, ys_p = zip(*pts_prec)
+                ax.plot(xs_p, ys_p, marker="o", label="Precision")
+
+            # Recall (ohne ersten Wert)
+            if points_recall:
+                pts_rec = sorted(points_recall, key=lambda p: p[0])
+                if len(pts_rec) > 1:
+                    pts_rec = pts_rec[1:]
+                else:
+                    pts_rec = []
+
+                if pts_rec:
+                    xs_r, ys_r = zip(*pts_rec)
+                    ax.plot(xs_r, ys_r, marker="o", label="Recall")
 
             ax.set_xlim(left=0)
             ax.set_ylim(bottom=0)
@@ -1842,18 +1944,19 @@ def plot_graphs():
             except Exception:
                 pass
 
-            ax.set_title(f"{metric} (Recall)")
+            ax.set_title(f"{metric} (Precision/Recall)")
             ax.set_xlabel("Threshold")
-            ax.set_ylabel("Recall")
+            ax.set_ylabel("Score")
             ax.grid(True, linestyle="--", linewidth=0.5, alpha=0.5)
+            ax.legend()
             fig.tight_layout()
 
-            out_path = os.path.join(out_dir, f"{metric_slug}_recall.png")
+            out_path = os.path.join(out_dir, f"{metric_slug}_prec_rec.png")
             try:
                 fig.savefig(out_path)
                 plotted += 1
             except Exception as e:
-                logging.info(f"Failed to save Recall plot for {metric} at {out_path}: {e}")
+                logging.info(f"Failed to save combined Precision/Recall plot for {metric} at {out_path}: {e}")
             finally:
                 plt.close(fig)
 
