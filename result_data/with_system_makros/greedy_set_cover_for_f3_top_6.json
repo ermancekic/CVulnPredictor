@@ -1,0 +1,54 @@
+{
+  "metrics": [
+    "max pointer arithmetic variable is involved in",
+    "maximum nesting level of control structures",
+    "maximum of control dependent control structures",
+    "number of if structures without else",
+    "number of pointer arithmetic",
+    "number of variables involved in control predicates"
+  ],
+  "order": [
+    {
+      "metric": "maximum of control dependent control structures",
+      "index": 0,
+      "diag": 146,
+      "estimated_new": 146,
+      "estimated_total_covered": 146
+    },
+    {
+      "metric": "number of pointer arithmetic",
+      "index": 1,
+      "diag": 141,
+      "estimated_new": 62,
+      "estimated_total_covered": 208
+    },
+    {
+      "metric": "maximum nesting level of control structures",
+      "index": 2,
+      "diag": 74,
+      "estimated_new": 2,
+      "estimated_total_covered": 210
+    },
+    {
+      "metric": "number of variables involved in control predicates",
+      "index": 3,
+      "diag": 128,
+      "estimated_new": 0,
+      "estimated_total_covered": 210
+    },
+    {
+      "metric": "number of if structures without else",
+      "index": 4,
+      "diag": 111,
+      "estimated_new": 0,
+      "estimated_total_covered": 210
+    },
+    {
+      "metric": "max pointer arithmetic variable is involved in",
+      "index": 5,
+      "diag": 78,
+      "estimated_new": 0,
+      "estimated_total_covered": 210
+    }
+  ]
+}

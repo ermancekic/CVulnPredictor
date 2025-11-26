@@ -1,0 +1,134 @@
+{
+  "metrics": [
+    "cyclomatic complexity",
+    "lines of code",
+    "max nesting loop depth",
+    "max pointer arithmetic variable is involved in",
+    "maximum nesting level of control structures",
+    "maximum of control dependent control structures",
+    "maximum of data dependent control structures",
+    "number of callee parameter variables",
+    "number of if structures without else",
+    "number of loops",
+    "number of nested control structures",
+    "number of nested loops",
+    "number of parameter variables",
+    "number of pointer arithmetic",
+    "number of variables involved in control predicates",
+    "number of variables involved in pointer arithmetic"
+  ],
+  "order": [
+    {
+      "metric": "lines of code",
+      "index": 0,
+      "diag": 202,
+      "estimated_new": 202,
+      "estimated_total_covered": 202
+    },
+    {
+      "metric": "number of nested control structures",
+      "index": 1,
+      "diag": 184,
+      "estimated_new": 123,
+      "estimated_total_covered": 325
+    },
+    {
+      "metric": "number of parameter variables",
+      "index": 2,
+      "diag": 42,
+      "estimated_new": 28,
+      "estimated_total_covered": 353
+    },
+    {
+      "metric": "maximum nesting level of control structures",
+      "index": 3,
+      "diag": 74,
+      "estimated_new": 17,
+      "estimated_total_covered": 370
+    },
+    {
+      "metric": "maximum of data dependent control structures",
+      "index": 4,
+      "diag": 160,
+      "estimated_new": 0,
+      "estimated_total_covered": 370
+    },
+    {
+      "metric": "maximum of control dependent control structures",
+      "index": 5,
+      "diag": 146,
+      "estimated_new": 0,
+      "estimated_total_covered": 370
+    },
+    {
+      "metric": "number of pointer arithmetic",
+      "index": 6,
+      "diag": 141,
+      "estimated_new": 0,
+      "estimated_total_covered": 370
+    },
+    {
+      "metric": "number of variables involved in pointer arithmetic",
+      "index": 7,
+      "diag": 133,
+      "estimated_new": 0,
+      "estimated_total_covered": 370
+    },
+    {
+      "metric": "number of variables involved in control predicates",
+      "index": 8,
+      "diag": 128,
+      "estimated_new": 0,
+      "estimated_total_covered": 370
+    },
+    {
+      "metric": "number of if structures without else",
+      "index": 9,
+      "diag": 111,
+      "estimated_new": 0,
+      "estimated_total_covered": 370
+    },
+    {
+      "metric": "cyclomatic complexity",
+      "index": 10,
+      "diag": 78,
+      "estimated_new": 0,
+      "estimated_total_covered": 370
+    },
+    {
+      "metric": "max pointer arithmetic variable is involved in",
+      "index": 11,
+      "diag": 78,
+      "estimated_new": 0,
+      "estimated_total_covered": 370
+    },
+    {
+      "metric": "number of callee parameter variables",
+      "index": 12,
+      "diag": 76,
+      "estimated_new": 0,
+      "estimated_total_covered": 370
+    },
+    {
+      "metric": "number of loops",
+      "index": 13,
+      "diag": 59,
+      "estimated_new": 0,
+      "estimated_total_covered": 370
+    },
+    {
+      "metric": "max nesting loop depth",
+      "index": 14,
+      "diag": 43,
+      "estimated_new": 0,
+      "estimated_total_covered": 370
+    },
+    {
+      "metric": "number of nested loops",
+      "index": 15,
+      "diag": 35,
+      "estimated_new": 0,
+      "estimated_total_covered": 370
+    }
+  ]
+}

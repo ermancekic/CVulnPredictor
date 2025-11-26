@@ -1,0 +1,122 @@
+{
+  "LinesChanged": {
+    "threshold": "0",
+    "lift": 1.0,
+    "methods": 78798206,
+    "found_vulns": 3994
+  },
+  "LinesNew": {
+    "threshold": "0",
+    "lift": 1.0,
+    "methods": 78798206,
+    "found_vulns": 3994
+  },
+  "NumChanges": {
+    "threshold": "1750",
+    "lift": 2.488138992067943,
+    "methods": 142727,
+    "found_vulns": 18
+  },
+  "NumDevs": {
+    "threshold": "200",
+    "lift": 8.155909556770045,
+    "methods": 2419,
+    "found_vulns": 1
+  },
+  "cyclomatic complexity": {
+    "threshold": "1800",
+    "lift": 47.13125947880254,
+    "methods": 2093,
+    "found_vulns": 5
+  },
+  "lines of code": {
+    "threshold": "500",
+    "lift": 18.161266127668323,
+    "methods": 151000,
+    "found_vulns": 139
+  },
+  "max nesting loop depth": {
+    "threshold": "8",
+    "lift": 54.48367810998487,
+    "methods": 3259,
+    "found_vulns": 9
+  },
+  "max pointer arithmetic variable is involved in": {
+    "threshold": "1500",
+    "lift": 99.97877644168958,
+    "methods": 1776,
+    "found_vulns": 9
+  },
+  "maximum nesting level of control structures": {
+    "threshold": "14",
+    "lift": 131.38165516865755,
+    "methods": 1802,
+    "found_vulns": 12
+  },
+  "maximum of control dependent control structures": {
+    "threshold": "210",
+    "lift": 43.66062565494161,
+    "methods": 18075,
+    "found_vulns": 40
+  },
+  "maximum of data dependent control structures": {
+    "threshold": "400",
+    "lift": 46.99013832078502,
+    "methods": 2939,
+    "found_vulns": 7
+  },
+  "number of callee parameter variables": {
+    "threshold": "125",
+    "lift": 24.237279137379286,
+    "methods": 6512,
+    "found_vulns": 8
+  },
+  "number of if structures without else": {
+    "threshold": "270",
+    "lift": 27.36358560031448,
+    "methods": 10094,
+    "found_vulns": 14
+  },
+  "number of loops": {
+    "threshold": "390",
+    "lift": 41.08811916242987,
+    "methods": 2881,
+    "found_vulns": 6
+  },
+  "number of nested control structures": {
+    "threshold": "6",
+    "lift": 5.25011059459555,
+    "methods": 691445,
+    "found_vulns": 184
+  },
+  "number of nested loops": {
+    "threshold": "8",
+    "lift": 9.052320795793657,
+    "methods": 76281,
+    "found_vulns": 35
+  },
+  "number of parameter variables": {
+    "threshold": "21",
+    "lift": 7.501893065209374,
+    "methods": 23669,
+    "found_vulns": 9
+  },
+  "number of pointer arithmetic": {
+    "threshold": "2800",
+    "lift": 189.9316025783561,
+    "methods": 831,
+    "found_vulns": 8
+  },
+  "number of variables involved in control predicates": {
+    "threshold": "74",
+    "lift": 37.015281834571745,
+    "methods": 13325,
+    "found_vulns": 25
+  },
+  "number of variables involved in pointer arithmetic": {
+    "threshold": "39",
+    "lift": 69.12804911642165,
+    "methods": 1427,
+    "found_vulns": 5
+  }
+}

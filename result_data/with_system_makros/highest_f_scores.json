@@ -1,0 +1,402 @@
+{
+  "LinesChanged": {
+    "f1": {
+      "threshold": "0",
+      "score": 0.00010136772831215372,
+      "methods": 78798206,
+      "found_vulns": 3994
+    },
+    "f2": {
+      "threshold": "0",
+      "score": 0.000253380793827182,
+      "methods": 78798206,
+      "found_vulns": 3994
+    },
+    "f3": {
+      "threshold": "0",
+      "score": 0.0005066332165277811,
+      "methods": 78798206,
+      "found_vulns": 3994
+    }
+  },
+  "LinesNew": {
+    "f1": {
+      "threshold": "0",
+      "score": 0.00010136772831215372,
+      "methods": 78798206,
+      "found_vulns": 3994
+    },
+    "f2": {
+      "threshold": "0",
+      "score": 0.000253380793827182,
+      "methods": 78798206,
+      "found_vulns": 3994
+    },
+    "f3": {
+      "threshold": "0",
+      "score": 0.0005066332165277811,
+      "methods": 78798206,
+      "found_vulns": 3994
+    }
+  },
+  "NumChanges": {
+    "f1": {
+      "threshold": "1750",
+      "score": 0.000245363649375345,
+      "methods": 142727,
+      "found_vulns": 18
+    },
+    "f2": {
+      "threshold": "1750",
+      "score": 0.0005670970303018846,
+      "methods": 142727,
+      "found_vulns": 18
+    },
+    "f3": {
+      "threshold": "300",
+      "score": 0.0010795211937962232,
+      "methods": 5151539,
+      "found_vulns": 560
+    }
+  },
+  "NumDevs": {
+    "f1": {
+      "threshold": "200",
+      "score": 0.0003118665211289568,
+      "methods": 2419,
+      "found_vulns": 1
+    },
+    "f2": {
+      "threshold": "50",
+      "score": 0.0003506220844906752,
+      "methods": 2579411,
+      "found_vulns": 182
+    },
+    "f3": {
+      "threshold": "50",
+      "score": 0.0006958897007177223,
+      "methods": 2579411,
+      "found_vulns": 182
+    }
+  },
+  "cyclomatic complexity": {
+    "f1": {
+      "threshold": "600",
+      "score": 0.0023799607306479445,
+      "methods": 12813,
+      "found_vulns": 20
+    },
+    "f2": {
+      "threshold": "200",
+      "score": 0.00423411393023483,
+      "methods": 76133,
+      "found_vulns": 78
+    },
+    "f3": {
+      "threshold": "200",
+      "score": 0.006959376868101963,
+      "methods": 76133,
+      "found_vulns": 78
+    }
+  },
+  "lines of code": {
+    "f1": {
+      "threshold": "500",
+      "score": 0.0017936178174639016,
+      "methods": 151000,
+      "found_vulns": 139
+    },
+    "f2": {
+      "threshold": "400",
+      "score": 0.004240739652175374,
+      "methods": 222190,
+      "found_vulns": 202
+    },
+    "f3": {
+      "threshold": "400",
+      "score": 0.007825332382929928,
+      "methods": 222190,
+      "found_vulns": 202
+    }
+  },
+  "max nesting loop depth": {
+    "f1": {
+      "threshold": "8",
+      "score": 0.002481731697228733,
+      "methods": 3259,
+      "found_vulns": 9
+    },
+    "f2": {
+      "threshold": "8",
+      "score": 0.0023394853132310896,
+      "methods": 3259,
+      "found_vulns": 9
+    },
+    "f3": {
+      "threshold": "5",
+      "score": 0.0029430687309213856,
+      "methods": 110160,
+      "found_vulns": 43
+    }
+  },
+  "max pointer arithmetic variable is involved in": {
+    "f1": {
+      "threshold": "1125",
+      "score": 0.004016640367235691,
+      "methods": 2977,
+      "found_vulns": 14
+    },
+    "f2": {
+      "threshold": "300",
+      "score": 0.006929510155316607,
+      "methods": 25874,
+      "found_vulns": 58
+    },
+    "f3": {
+      "threshold": "225",
+      "score": 0.010137374420025214,
+      "methods": 40997,
+      "found_vulns": 78
+    }
+  },
+  "maximum nesting level of control structures": {
+    "f1": {
+      "threshold": "13",
+      "score": 0.0058504875406283855,
+      "methods": 5236,
+      "found_vulns": 27
+    },
+    "f2": {
+      "threshold": "10",
+      "score": 0.007942982267828774,
+      "methods": 30606,
+      "found_vulns": 74
+    },
+    "f3": {
+      "threshold": "10",
+      "score": 0.011119124894819088,
+      "methods": 30606,
+      "found_vulns": 74
+    }
+  },
+  "maximum of control dependent control structures": {
+    "f1": {
+      "threshold": "210",
+      "score": 0.0036249943359463496,
+      "methods": 18075,
+      "found_vulns": 40
+    },
+    "f2": {
+      "threshold": "130",
+      "score": 0.006061510341869183,
+      "methods": 37641,
+      "found_vulns": 65
+    },
+    "f3": {
+      "threshold": "70",
+      "score": 0.010107653432102183,
+      "methods": 108499,
+      "found_vulns": 146
+    }
+  },
+  "maximum of data dependent control structures": {
+    "f1": {
+      "threshold": "400",
+      "score": 0.0020193278523005917,
+      "methods": 2939,
+      "found_vulns": 7
+    },
+    "f2": {
+      "threshold": "40",
+      "score": 0.0038005297708165377,
+      "methods": 114269,
+      "found_vulns": 99
+    },
+    "f3": {
+      "threshold": "30",
+      "score": 0.0068870226970441754,
+      "methods": 196375,
+      "found_vulns": 160
+    }
+  },
+  "number of callee parameter variables": {
+    "f1": {
+      "threshold": "55",
+      "score": 0.0017355386244120863,
+      "methods": 53625,
+      "found_vulns": 50
+    },
+    "f2": {
+      "threshold": "55",
+      "score": 0.0035919024151951843,
+      "methods": 53625,
+      "found_vulns": 50
+    },
+    "f3": {
+      "threshold": "45",
+      "score": 0.005856425114816755,
+      "methods": 93826,
+      "found_vulns": 76
+    }
+  },
+  "number of if structures without else": {
+    "f1": {
+      "threshold": "70",
+      "score": 0.002128924605381768,
+      "methods": 100284,
+      "found_vulns": 111
+    },
+    "f2": {
+      "threshold": "70",
+      "score": 0.004773782900395665,
+      "methods": 100284,
+      "found_vulns": 111
+    },
+    "f3": {
+      "threshold": "70",
+      "score": 0.008147985025324819,
+      "methods": 100284,
+      "found_vulns": 111
+    }
+  },
+  "number of loops": {
+    "f1": {
+      "threshold": "150",
+      "score": 0.0023836406975285412,
+      "methods": 11948,
+      "found_vulns": 19
+    },
+    "f2": {
+      "threshold": "150",
+      "score": 0.003402091390918207,
+      "methods": 11948,
+      "found_vulns": 19
+    },
+    "f3": {
+      "threshold": "40",
+      "score": 0.004755610007737943,
+      "methods": 88118,
+      "found_vulns": 59
+    }
+  },
+  "number of nested control structures": {
+    "f1": {
+      "threshold": "6",
+      "score": 0.000529162155127912,
+      "methods": 691445,
+      "found_vulns": 184
+    },
+    "f2": {
+      "threshold": "6",
+      "score": 0.0013004985715719495,
+      "methods": 691445,
+      "found_vulns": 184
+    },
+    "f3": {
+      "threshold": "6",
+      "score": 0.0025295886256497535,
+      "methods": 691445,
+      "found_vulns": 184
+    }
+  },
+  "number of nested loops": {
+    "f1": {
+      "threshold": "8",
+      "score": 0.0008720024914356898,
+      "methods": 76281,
+      "found_vulns": 35
+    },
+    "f2": {
+      "threshold": "8",
+      "score": 0.0018968750338727684,
+      "methods": 76281,
+      "found_vulns": 35
+    },
+    "f3": {
+      "threshold": "8",
+      "score": 0.0031186791057410427,
+      "methods": 76281,
+      "found_vulns": 35
+    }
+  },
+  "number of parameter variables": {
+    "f1": {
+      "threshold": "20",
+      "score": 0.0006612563871355576,
+      "methods": 29276,
+      "found_vulns": 11
+    },
+    "f2": {
+      "threshold": "20",
+      "score": 0.0012154158932201893,
+      "methods": 29276,
+      "found_vulns": 11
+    },
+    "f3": {
+      "threshold": "13",
+      "score": 0.0019982776749563474,
+      "methods": 174235,
+      "found_vulns": 42
+    }
+  },
+  "number of pointer arithmetic": {
+    "f1": {
+      "threshold": "2200",
+      "score": 0.004861955200555652,
+      "methods": 1765,
+      "found_vulns": 14
+    },
+    "f2": {
+      "threshold": "400",
+      "score": 0.006636222527163522,
+      "methods": 28477,
+      "found_vulns": 59
+    },
+    "f3": {
+      "threshold": "200",
+      "score": 0.010200538241166767,
+      "methods": 102282,
+      "found_vulns": 141
+    }
+  },
+  "number of variables involved in control predicates": {
+    "f1": {
+      "threshold": "66",
+      "score": 0.0029624466323952257,
+      "methods": 18960,
+      "found_vulns": 34
+    },
+    "f2": {
+      "threshold": "48",
+      "score": 0.00599678221442153,
+      "methods": 52394,
+      "found_vulns": 82
+    },
+    "f3": {
+      "threshold": "40",
+      "score": 0.009503303882990572,
+      "methods": 98744,
+      "found_vulns": 128
+    }
+  },
+  "number of variables involved in pointer arithmetic": {
+    "f1": {
+      "threshold": "33",
+      "score": 0.002467003823855927,
+      "methods": 4113,
+      "found_vulns": 10
+    },
+    "f2": {
+      "threshold": "12",
+      "score": 0.003844463971880492,
+      "methods": 157000,
+      "found_vulns": 133
+    },
+    "f3": {
+      "threshold": "12",
+      "score": 0.006893120354917956,
+      "methods": 157000,
+      "found_vulns": 133
+    }
+  }
+}
