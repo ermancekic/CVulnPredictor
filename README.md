@@ -2,36 +2,39 @@
 
 # CVulnPredictor
 
-This code was developed as part of my Bachelor's thesis on evaluating software metrics as targeting strategies for directed fuzzing in OSS-Fuzz projects.
+CVulnPredictor is the end-to-end pipeline that underpins my Bachelor's thesis on evaluating software metrics as targeting strategies for directed fuzzing in OSS-Fuzz projects. It clones vulnerable OSS-Fuzz cases, computes a rich set of process and product metrics, and quantifies which metrics surface vulnerable functions most efficiently.
 
 ## Overview
 
-This project analyzes the effectiveness of software metrics as targeting strategies for directed fuzzing. It processes C/C++ projects from OSS-Fuzz, calculates function‑level code metrics (e.g., cyclomatic complexity, lines of code, loop nesting depth, pointer arithmetic, control‑structure properties) and product (project‑level) metrics from Git history (e.g., number of changes, lines changed, number of contributors), and evaluates how well these metrics can identify vulnerable functions.
+At a high level the system:
+- prepares a reproducible workspace (folder layout, ARVO database, bundled Clang/LLVM toolchain),
+- exports per-project crash manifests from the ARVO dataset and enriches them with best-effort file/line/function locations,
+- replays ARVO Docker images to extract the vulnerable source code plus its headers and build artifacts,
+- computes file-level process metrics and function-level product metrics via Clang’s Python bindings, and
+- analyzes the metric outputs to measure lift, precision/recall, coverage, and \(F_\beta\) scores while recording timing data and overlaps.
 
-The system:
-- Clones vulnerable OSS-Fuzz projects and their specific vulnerable commits
-- Uses Clang/LLVM to parse source code and calculate function‑level metrics, plus product (project‑level) metrics from Git history
-- Filters functions based on configurable metric thresholds
-- Matches filtered functions against known vulnerabilities
-- Generates statistical reports on the effectiveness of each metric as a targeting strategy
+The overall goal is to determine which metrics best identify code that deserves attention during directed fuzzing campaigns.
 
-The goal is to determine which software metrics are most effective at identifying potentially vulnerable code sections for directed fuzzing campaigns.
 
 ## Metrics
-- Full list and definitions: `docs/Metrics.md`
-- Categories:
-  - Project Metrics (function‑level): cyclomatic complexity, LOC, loops and nesting, pointer arithmetic, control‑structure metrics, parameters, etc.
-  - Product Metrics (project‑level/Git): `NumChanges`, `LinesChanged`, `LinesNew`, `NumDevs`.
 
-## Dependencies
-- python3
-- python3-pip
-- python3-venv
-- git
+- Detailed list: `docs/Metrics.md`.
+- **Function-level (product) metrics:** cyclomatic complexity, LOC, loop nesting, pointer arithmetic intensity, control-structure depth, argument usage, and related structural features extracted from the AST.
+- **File-level (process) metrics:** accumulated commit counts, lines added/changed, and distinct contributors gathered via Git history.
 
-## Run the pipeline
+Together these metrics describe both the inherent complexity of a function and the development churn around its file, allowing the analysis to blend static structure with change history.
 
-From within the base directory, run:
-```
+## Requirements
+
+- `python3`, `python3-pip`, `python3-venv`, `git`, `docker`
+- The pipeline downloads the necessary Clang/LLVM artifacts automatically during the Project Preparation step.
+
+## Running the Pipeline
+
+Run the full end-to-end workflow from the repository root:
+
+```bash
 ./src/run.sh
 ```
+
+The script invokes `main.py`, which walks through each stage in order. Logs and per-step progress reports are written to `logs/`. If a step already produced the expected artifacts it is skipped, keeping reruns fast and safe.

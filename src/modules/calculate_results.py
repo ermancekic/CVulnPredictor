@@ -1969,25 +1969,7 @@ def calculate_overlap_of_metrics(threshold_override: dict | None = None):
     Compute the pairwise overlap of vulnerabilities detected by each metric
     (at its currently selected threshold) and generate a heatmap plot.
 
-    Vorgehen (Deutsch):
-    - Für jede Metrik in data/single-metrics wird ausschließlich der
-      Threshold-Unterordner verwendet, der in data/general/result.json unter
-      "threshold" konfiguriert ist.
-    - Wir iterieren über alle Vulnerabilities in data/arvo-projects und
-      ermitteln – analog zu check_if_function_in_vulns – pro Metrik die Menge
-      der tatsächlich gefundenen Vulnerabilities (sm_key = "{projekt}_{localID}").
-      Details zur Übereinstimmung:
-        * Es wird per Suffix der Dateipfad verglichen, Funktionsname per
-          Basisnamen (ohne Namespace/Templates) gematcht.
-        * Falls in der Vulnerability-Quelle Parameter existieren, wird die
-          gleiche Parameteranzahl (Arity) gefordert; Typgleichheit wird nicht
-          strikt geprüft (entspricht check_if_function_in_vulns).
-    - Aus den Found-Mengen bauen wir eine Overlap-Matrix: Zelle (i, j) = Anzahl
-      der gemeinsamen sm_keys zwischen Metrik i und Metrik j.
-    - Ergebnis wird als JSON unter data/general/overlap_matrix.json gespeichert
-      und als Heatmap unter data/general/plots/overlap_matrix.png visualisiert.
-
-    Approach (English):
+    Procedure:
     - Read metrics under data/single-metrics and, for each metric, select only
       the subfolder that corresponds to its configured threshold from
       data/general/result.json (key: "threshold").

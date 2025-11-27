@@ -284,7 +284,7 @@ def main() -> None:
                 logging.warning("Repo directory missing: %s – skipping %s", repo_dir, entry.name)
 
     # Calculate metrics in parallel
-    max_workers = mp.cpu_count() * 2
+    max_workers = 64
     successes = 0
     failures = 0
 
@@ -319,27 +319,28 @@ def main() -> None:
 
     finished = False
 
-    while not finished:
+    # while not finished:
+    for i in range(40):
         increments = {
-            "lines of code": 2,
-            "cyclomatic complexity": 10,
-            "number of loops": 2,
+            "lines of code": 100,
+            "cyclomatic complexity": 100,
+            "number of loops": 10,
             "number of nested loops": 2,
             "max nesting loop depth": 1,
             "number of parameter variables": 1,
-            "number of callee parameter variables": 1,
+            "number of callee parameter variables": 5,
             "number of pointer arithmetic": 200,
             "number of variables involved in pointer arithmetic": 1,
-            "max pointer arithmetic variable is involved in": 50,
+            "max pointer arithmetic variable is involved in": 75,
             "number of nested control structures": 2,
             "maximum nesting level of control structures": 1,
-            "maximum of control dependent control structures": 2,
-            "maximum of data dependent control structures": 2,
-            "number of if structures without else": 2,
+            "maximum of control dependent control structures": 10,
+            "maximum of data dependent control structures": 10,
+            "number of if structures without else": 10,
             "number of variables involved in control predicates": 2,
             "NumChanges": 50,
-            "LinesChanged": 5000,
-            "LinesNew": 5000,
+            "LinesChanged": 10000,
+            "LinesNew": 10000,
             "NumDevs": 5,
         }
         for key in THRESHOLDS:
@@ -358,10 +359,31 @@ def main() -> None:
     except Exception as e:
         logging.info(f"plot_graphs failed: {e}")
 
+
+    threshold = {
+        "lines of code": 500,
+        "cyclomatic complexity": 1800,
+        "number of loops": 390,
+        "number of nested loops": 8,
+        "max nesting loop depth": 8,
+        "number of parameter variables": 21,
+        "number of callee parameter variables": 125,
+        "number of pointer arithmetic": 2800,
+        "number of variables involved in pointer arithmetic": 39,
+        "max pointer arithmetic variable is involved in": 1500,
+        "number of nested control structures": 6,
+        "maximum nesting level of control structures": 14,
+        "maximum of control dependent control structures": 210,
+        "maximum of data dependent control structures": 400,
+        "number of if structures without else": 270,
+        "number of variables involved in control predicates": 74,
+    }
+
+    calc_results.calculate_overlap_of_metrics(threshold)
+
 if __name__ == "__main__":
     try:
         main()
     finally:
-        # Measure total wall-clock runtime and persist to data/times/main.json
         duration = max(0.0, time.perf_counter() - _MAIN_START_PERF)
         _write_main_runtime(duration)

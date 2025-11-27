@@ -103,11 +103,11 @@ def _greedy_order(metrics: List[str], matrix: List[List[int]]) -> List[Dict[str,
     result: List[Dict[str, Any]] = []
     total_covered_est = 0
 
-    # Helper: compute estimated new coverage for candidate i
+    # Helper: compute estimated new coverage for candidate i.
+    # Ignore self-overlap so we don't zero-out the first pick if it is
+    # temporarily marked as selected.
     def estimated_new(i: int) -> int:
-        if not selected:
-            return diag[i]
-        overlap_sum = sum(matrix[i][j] for j in selected)
+        overlap_sum = sum(matrix[i][j] for j in selected if j != i)
         new_val = diag[i] - overlap_sum
         return new_val if new_val > 0 else 0
 
@@ -117,8 +117,9 @@ def _greedy_order(metrics: List[str], matrix: List[List[int]]) -> List[Dict[str,
 
     first = max(remaining, key=lambda i: diag[i])
     remaining.remove(first)
+    # The first metric's new coverage is its full diagonal value
+    first_new = diag[first]
     selected.append(first)
-    first_new = estimated_new(first)
     total_covered_est += first_new
     result.append(
         {

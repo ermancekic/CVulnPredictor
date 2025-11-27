@@ -1,8 +1,3 @@
-# Metrics
-Static metrics are single‑point measurements used as target strategies in fuzzing to guide and evaluate which inputs yield the most useful new behaviors.
-
-In this project, we will examine the open‑source projects enrolled in OSS‑Fuzz, apply various metrics to them, and compare the metric results with their OSS‑Fuzz issue tracker data to determine which individual metrics—or combinations of metrics—would have been most effective as a targeting strategy.
-
 # Leopard C 
 
 - **Lines of Code (LOC)**

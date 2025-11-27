@@ -1,0 +1,72 @@
+{
+  "greedy_source": "data/general/greedy_set_cover_for_f3_top_6.json",
+  "thresholds": {
+    "lines of code": 400,
+    "cyclomatic complexity": 200,
+    "number of loops": 40,
+    "number of nested loops": 8,
+    "max nesting loop depth": 5,
+    "number of parameter variables": 13,
+    "number of callee parameter variables": 45,
+    "number of pointer arithmetic": 200,
+    "number of variables involved in pointer arithmetic": 12,
+    "max pointer arithmetic variable is involved in": 225,
+    "number of nested control structures": 6,
+    "maximum nesting level of control structures": 10,
+    "maximum of control dependent control structures": 70,
+    "maximum of data dependent control structures": 30,
+    "number of if structures without else": 70,
+    "number of variables involved in control predicates": 40
+  },
+  "metrics": [
+    {
+      "metric": "maximum of control dependent control structures",
+      "index": 0,
+      "threshold": 70,
+      "methods": 108499,
+      "new_unique": 108499,
+      "cumulative_unique": 108499
+    },
+    {
+      "metric": "number of pointer arithmetic",
+      "index": 1,
+      "threshold": 200,
+      "methods": 102282,
+      "new_unique": 62111,
+      "cumulative_unique": 170610
+    },
+    {
+      "metric": "maximum nesting level of control structures",
+      "index": 2,
+      "threshold": 10,
+      "methods": 30606,
+      "new_unique": 15682,
+      "cumulative_unique": 186292
+    },
+    {
+      "metric": "number of variables involved in control predicates",
+      "index": 3,
+      "threshold": 40,
+      "methods": 98744,
+      "new_unique": 51961,
+      "cumulative_unique": 238253
+    },
+    {
+      "metric": "number of if structures without else",
+      "index": 4,
+      "threshold": 70,
+      "methods": 100284,
+      "new_unique": 26140,
+      "cumulative_unique": 264393
+    },
+    {
+      "metric": "max pointer arithmetic variable is involved in",
+      "index": 5,
+      "threshold": 225,
+      "methods": 40997,
+      "new_unique": 74,
+      "cumulative_unique": 264467
+    }
+  ],
+  "total_unique_methods": 264467
+}
